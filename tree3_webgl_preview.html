@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#080c16">
+<title>TREE(3) — GPU Visual Engine Preview</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#070b14}body{font-family:system-ui,sans-serif}.scene{position:fixed;inset:0;background:radial-gradient(ellipse at 50% 48%,#172942 0%,#0c1729 48%,#070b14 100%)}canvas{display:block;width:100%;height:100%;touch-action:none;cursor:grab}canvas.rotating{cursor:grabbing}.controls{position:fixed;left:50%;top:calc(100% - 100px);transform:translateX(-50%);touch-action:none;user-select:none;cursor:grab;display:flex;align-items:center;gap:18px;padding:11px 19px;border:1px solid #a8c7e329;background:#091423b8;backdrop-filter:blur(22px);border-radius:999px;box-shadow:0 12px 45px #0006;transition:opacity .2s}.controls.dragging{cursor:grabbing}.control{touch-action:manipulation;appearance:none;border:0;background:none;color:#d9f4f5;display:grid;place-items:center;cursor:pointer;width:34px;height:34px;padding:0}.control svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.control.primary{width:46px;height:46px;background:#a8edf0;border-radius:50%;color:#081722}.control.primary svg{width:22px;height:22px}.control:focus-visible,input:focus-visible{outline:2px solid #b8f8f7;outline-offset:5px}.control:hover{color:#fff}.control.primary:hover{background:#d7ffff}.volume{touch-action:pan-x;width:96px;accent-color:#a8edf0;cursor:pointer}.hidden{display:none!important}@media(max-width:500px){.controls{gap:12px;padding:9px 14px}.volume{width:75px}}@media(prefers-reduced-motion:reduce){.controls{transition:none}}
+</style>
+</head>
+<body>
+<main class="scene"><canvas id="art" role="img" aria-label="Three nested luminous toroidal waveform structures: drone, harmony, and texture"></canvas></main>
+<div class="controls" id="controls" role="group" aria-label="Radio player controls" title="Drag empty space to reposition; double-click empty space to reset">
+<button class="control primary" id="play" aria-label="Play radio" title="Play or pause">
+<svg id="playIcon" viewBox="0 0 24 24"><path d="M9 6l10 6-10 6z" fill="currentColor" stroke="none"/></svg>
+</button>
+<button class="control" id="mute" aria-label="Mute audio" title="Mute or unmute">
+<svg id="speakerIcon" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M18.5 6a9 9 0 0 1 0 12"/></svg>
+</button>
+<input class="volume" id="volume" aria-label="Volume" type="range" min="0" max="1" step="0.01" value="0.75">
+</div>
+<audio id="stream" preload="none"></audio>
+<script type="module">
+import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js";
+// After setting up your broadcast server, paste its direct HTTPS audio stream URL here.
+const STREAM_URL = "https://akasha.tree3.stream/listen/tree3/radio.mp3";
+// Leave null until Akasha has a secure, authenticated visual telemetry endpoint.
+const TELEMETRY_WS_URL = null; // e.g. "wss://akasha.tree3.stream/visuals"
+
+// Draggable player: grab the pill background, not its buttons or volume slider.
+const controls=document.getElementById('controls');
+const POSITION_KEY='shift-wave-player-position-v04';
+let drag=null;
+function setPlayerPosition(x,y){
+  const r=controls.getBoundingClientRect();
+  x=Math.max(0,Math.min(innerWidth-r.width,x));
+  y=Math.max(0,Math.min(innerHeight-r.height,y));
+  controls.style.left=x+'px';controls.style.top=y+'px';controls.style.transform='none';
+}
+function restorePlayer(){
+  try{const pos=JSON.parse(localStorage.getItem(POSITION_KEY));
+    if(pos&&Number.isFinite(pos.x)&&Number.isFinite(pos.y))setPlayerPosition(pos.x*innerWidth,pos.y*innerHeight);
+  }catch(e){}
+}
+controls.addEventListener('pointerdown',e=>{
+  if(e.target.closest('button,input'))return;
+  const r=controls.getBoundingClientRect();
+  drag={id:e.pointerId,dx:e.clientX-r.left,dy:e.clientY-r.top};
+  controls.setPointerCapture(e.pointerId);controls.classList.add('dragging');e.preventDefault();
+});
+controls.addEventListener('pointermove',e=>{if(drag&&e.pointerId===drag.id)setPlayerPosition(e.clientX-drag.dx,e.clientY-drag.dy)});
+function endDrag(e){if(!drag||e.pointerId!==drag.id)return;
+  drag=null;controls.classList.remove('dragging');
+  const r=controls.getBoundingClientRect();
+  try{localStorage.setItem(POSITION_KEY,JSON.stringify({x:r.left/innerWidth,y:r.top/innerHeight}))}catch(e){}
+}
+controls.addEventListener('pointerup',endDrag);controls.addEventListener('pointercancel',endDrag);
+controls.addEventListener('dblclick',e=>{if(e.target.closest('button,input'))return;
+  try{localStorage.removeItem(POSITION_KEY)}catch(e){}
+  controls.style.left='50%';controls.style.top='calc(100% - 100px)';controls.style.transform='translateX(-50%)';
+});
+addEventListener('resize',()=>{if(controls.style.transform==='none'){
+  const r=controls.getBoundingClientRect();setPlayerPosition(r.left,r.top)
+}});
+requestAnimationFrame(restorePlayer);
+const audio=document.getElementById('stream');
+const play=document.getElementById('play');
+const playIcon=document.getElementById('playIcon');
+const mute=document.getElementById('mute');
+const speakerIcon=document.getElementById('speakerIcon');
+const volume=document.getElementById('volume');
+const playSvg='<path d="M9 6l10 6-10 6z" fill="currentColor" stroke="none"/>';
+const pauseSvg='<path d="M8 5v14M16 5v14"/>';
+const speakerSvg='<path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M18.5 6a9 9 0 0 1 0 12"/>';
+const mutedSvg='<path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 9l5 6M22 9l-5 6"/>';
+function syncControls(){playIcon.innerHTML=audio.paused?playSvg:pauseSvg;play.setAttribute('aria-label',audio.paused?'Play radio':'Pause radio');speakerIcon.innerHTML=audio.muted||audio.volume===0?mutedSvg:speakerSvg;mute.setAttribute('aria-label',audio.muted?'Unmute audio':'Mute audio')}
+audio.volume=Number(volume.value);
+volume.addEventListener('input',()=>{audio.volume=Number(volume.value);audio.muted=false;syncControls()});
+mute.addEventListener('click',()=>{audio.muted=!audio.muted;syncControls()});
+// Browser-side audio analysis; only attach a MediaElementAudioSource after a CORS check.
+// Otherwise, attaching an analyzer to a cross-origin stream can result in silence.
+let audioContext=null, analyser=null, frequencyData=null, timeData=null;
+let streamPrepared=false, analysisAvailable=false;
+async function prepareStream(){
+  if(streamPrepared)return;
+  streamPrepared=true;
+  let corsOK=false;
+  try{
+    const response=await fetch(STREAM_URL,{mode:'cors',cache:'no-store',signal:AbortSignal.timeout(4500)});
+    corsOK=response.ok && response.type==='cors';
+    if(response.body)await response.body.cancel();
+  }catch(e){console.info('TREE(3): audio analysis unavailable (stream CORS); using normal playback.',e)}
+  if(corsOK && (window.AudioContext||window.webkitAudioContext)){
+    audio.crossOrigin='anonymous';
+    audio.src=STREAM_URL;
+    try{
+      audioContext=new (window.AudioContext||window.webkitAudioContext)();
+      const source=audioContext.createMediaElementSource(audio);
+      analyser=audioContext.createAnalyser();
+      analyser.fftSize=2048;analyser.smoothingTimeConstant=.06;
+      source.connect(analyser);analyser.connect(audioContext.destination);
+      frequencyData=new Uint8Array(analyser.frequencyBinCount);
+      timeData=new Uint8Array(analyser.fftSize);
+      analysisAvailable=true;
+      console.info('TREE(3): browser audio analysis enabled');
+    }catch(e){console.warn('TREE(3): analyzer setup failed',e)}
+  }else{
+    audio.removeAttribute('crossorigin');
+    audio.src=STREAM_URL;
+  }
+}
+play.addEventListener('click',async()=>{
+  if(!audio.paused){audio.pause();return}
+  if(!STREAM_URL)return;
+  try{
+    await prepareStream();
+    if(audioContext&&audioContext.state==='suspended')await audioContext.resume();
+    await audio.play();
+  }catch(err){console.error('Unable to play radio stream:',err)}
+});
+audio.addEventListener('play',syncControls);
+audio.addEventListener('pause',syncControls);
+audio.addEventListener('error',()=>{syncControls();console.error('Radio stream unavailable')});
+syncControls();
+
+// A single normalized visual state accepts audio, MIDI, and composition messages.
+const visual={
+  audio:{bass:0,mid:0,high:0,rms:0},
+  midi:{pulse:0,notes:new Map(),cc:new Map(),bend:0},
+  composition:{density:.35,tension:.25,brightness:.5,energy:.35,mode:'ambient'},
+  targets:{},
+  connected:false,
+  dynamics:{bass:0,mid:0,high:0,level:0,hit:0,crash:0,silence:0,phase:0,flux:0,lowMid:0,presence:0,air:0,brightPulse:0,trebleBeat:0,bassGlow:0,structure:0}
+};
+const previousSpectrum=new Float32Array(1024);
+const envelopes={bass:.08,mid:.08,high:.08,presence:.08,air:.08};
+const bandOnsets={bass:0,mid:0,high:0};
+let prevLevel=0,prevHigh=0,transientCooldown=0,crashCooldown=0;
+let trebleNoiseFloor=0;
+function bandEnergy(low,high){
+  if(!analyser||!audioContext)return 0;
+  const binHz=audioContext.sampleRate/analyser.fftSize;
+  const lo=Math.max(0,Math.floor(low/binHz));
+  const hi=Math.min(frequencyData.length-1,Math.ceil(high/binHz));
+  let sum=0;
+  for(let i=lo;i<=hi;i++)sum+=frequencyData[i]/255;
+  return sum/Math.max(1,hi-lo+1);
+}
+function updateAudioAnalysis(dt){
+  const d=visual.dynamics, a=visual.audio;
+  transientCooldown=Math.max(0,transientCooldown-dt);
+  crashCooldown=Math.max(0,crashCooldown-dt);
+  if(analysisAvailable && !audio.paused && audioContext?.state==='running'){
+    analyser.getByteFrequencyData(frequencyData);
+    analyser.getByteTimeDomainData(timeData);
+    let power=0;
+    for(let i=0;i<timeData.length;i++){
+      const v=(timeData[i]-128)/128;power+=v*v;
+    }
+    const rms=Math.sqrt(power/timeData.length);
+    // Fast attack and slow release preserve the shape of cymbal crashes and kicks.
+    const raw={
+      bass:bandEnergy(30,179), mid:bandEnergy(180,2199), high:bandEnergy(2200,11000),
+      presence:bandEnergy(850,4200), air:bandEnergy(4200,11000), rms
+    };
+    for(const key of Object.keys(raw)){
+      const rate=raw[key]>a[key]?32:6;
+      a[key]+=(raw[key]-a[key])*(1-Math.exp(-dt*rate));
+    }
+    // Spectral flux identifies sudden new frequency content, even on loud recordings.
+    // Exclusive FFT-bin assignment. Each bin contributes to exactly one ring.
+    const rises={bass:0,mid:0,high:0},counts={bass:0,mid:0,high:0};
+    const hz=audioContext.sampleRate/analyser.fftSize;
+    for(let i=1;i<frequencyData.length;i++){
+      const freq=i*hz;
+      const key=freq<180?'bass':freq<2200?'mid':'high';
+      const magnitude=frequencyData[i]/255;
+      rises[key]+=Math.max(0,magnitude-previousSpectrum[i]);
+      counts[key]++;
+      previousSpectrum[i]=magnitude;
+    }
+    for(const key of ['bass','mid','high'])bandOnsets[key]=rises[key]/Math.max(1,counts[key]);
+    const flux=bandOnsets.bass+bandOnsets.mid+bandOnsets.high;
+    const highFlux=bandOnsets.high;
+    // Adaptive scaling: quiet ambient recordings should still animate.
+    for(const key of ['bass','mid','high','presence','air']){
+      const target=Math.max(.025,raw[key]);
+      const rate=target>envelopes[key]?1.5:.11;
+      envelopes[key]+=(target-envelopes[key])*(1-Math.exp(-dt*rate));
+      const normalized=Math.max(0,(raw[key]-.025)/Math.max(.16,envelopes[key]*2.4));
+      d[key]+=(Math.min(1,normalized)-d[key])*(1-Math.exp(-dt*(normalized>d[key]?19:4.5)));
+    }
+    // Each ring is exclusively controlled by its own spectral band.
+    d.lowMid=d.mid;
+    d.brightPulse=d.mid;
+    const level=Math.min(1.6,rms/.14);
+    d.level+=(level-d.level)*(1-Math.exp(-dt*(level>d.level?26:7)));
+    const highAttack=Math.max(0,raw.high-prevHigh);
+    prevLevel=rms;prevHigh=raw.high;
+    // Orange: rapid rise detection from HIGH bins only, with a short decay.
+    // No overall RMS, bass or midrange contribution to the orange onset.
+    const trebleAttack=clamp(highFlux*16+highAttack*4.8,0,1);
+    trebleNoiseFloor+=(trebleAttack-trebleNoiseFloor)*(1-Math.exp(-dt*(trebleAttack>trebleNoiseFloor?1.0:2.2)));
+    const onsetStrength=Math.max(0,trebleAttack-trebleNoiseFloor*1.15-.012);
+    const beatTarget=clamp(onsetStrength*3.0,0,1);
+    d.trebleBeat+=(beatTarget-d.trebleBeat)*(1-Math.exp(-dt*(beatTarget>d.trebleBeat?115:37)));
+    // No cross-band hit/crash triggers: local ring onsets are used below.
+    d.hit=0;d.crash=0;
+    d.flux=flux;
+    // A fast silence gate makes pauses visually meaningful.
+    const active= Math.max(rms/.022,raw.high/.07,raw.mid/.06);
+    const silenceTarget=active<.38?1:0;
+    d.silence+=(silenceTarget-d.silence)*(1-Math.exp(-dt*(silenceTarget?9:16)));
+    const structureTarget=clamp(.56*d.mid+.35*d.bass+.20*d.high,0,1);
+    d.structure+=(structureTarget-d.structure)*(1-Math.exp(-dt*(structureTarget>d.structure?7:4)));
+    const bassTarget=clamp(d.bass,0,1);
+    d.bassGlow+=(bassTarget-d.bassGlow)*(1-Math.exp(-dt*(bassTarget>d.bassGlow?24:8)));
+  }else{
+    for(const key of Object.keys(a))a[key]*=Math.exp(-dt*5);
+    for(const key of ['bass','mid','high','presence','air','lowMid','brightPulse','level','trebleBeat','bassGlow','structure'])d[key]*=Math.exp(-dt*5);
+    d.silence+=(1-d.silence)*(1-Math.exp(-dt*5));
+  }
+  d.hit*=Math.exp(-dt*15);
+  d.crash*=Math.exp(-dt*10);
+  d.phase+=dt*(.35+d.mid*1.8);
+}
+function applyMidi(message){
+  if(!message || typeof message!=='object')return;
+  const event=message.event||message.subtype;
+  const note=Number(message.note),velocity=Number(message.velocity??0);
+  const channel=Number(message.channel??1);
+  if(event==='note_on' && velocity>0 && Number.isFinite(note)){
+    visual.midi.notes.set(channel+':'+note,Math.min(1,velocity/127));
+    visual.midi.pulse=Math.max(visual.midi.pulse,Math.min(1,velocity/127));
+  }else if((event==='note_off'||(event==='note_on'&&velocity===0))&&Number.isFinite(note)){
+    visual.midi.notes.delete(channel+':'+note);
+  }else if(event==='cc'){
+    const controller=Number(message.controller??message.cc),value=Number(message.value);
+    if(Number.isFinite(controller)&&Number.isFinite(value))visual.midi.cc.set(channel+':'+controller,Math.max(0,Math.min(1,value/127)));
+  }else if(event==='pitch_bend'){
+    const value=Number(message.value);
+    if(Number.isFinite(value))visual.midi.bend=Math.max(-1,Math.min(1,Math.abs(value)>1?(value-8192)/8192:value));
+  }
+}
+function applyComposition(message){
+  if(!message||typeof message!=='object')return;
+  for(const key of ['density','tension','brightness','energy']){
+    if(typeof message[key]==='number'&&Number.isFinite(message[key])){
+      visual.targets[key]=Math.max(0,Math.min(1,message[key]));
+    }
+  }
+  if(typeof message.mode==='string')visual.composition.mode=message.mode.slice(0,40);
+}
+function updateComposition(dt){
+  const alpha=1-Math.exp(-dt*.7);
+  for(const [key,value] of Object.entries(visual.targets))visual.composition[key]+=(value-visual.composition[key])*alpha;
+  visual.midi.pulse*=Math.exp(-dt*10);
+}
+// Future timestamped events can be scheduled against a measured audio playback offset.
+// Until that offset is measured, composition messages are intentionally slow-moving.
+function receiveVisualMessage(message){
+  if(!message||typeof message!=='object')return;
+  if(message.type==='composition')applyComposition(message);
+  if(message.type==='midi')applyMidi(message);
+}
+let telemetrySocket=null;
+function connectTelemetry(){
+  if(!TELEMETRY_WS_URL)return;
+  let retry=1500;
+  function connect(){
+    try{
+      telemetrySocket=new WebSocket(TELEMETRY_WS_URL);
+      telemetrySocket.onopen=()=>{visual.connected=true;retry=1500};
+      telemetrySocket.onmessage=e=>{
+        if(typeof e.data!=='string'||e.data.length>8192)return;
+        try{receiveVisualMessage(JSON.parse(e.data))}catch(err){console.warn('TREE(3): invalid visual message')}
+      };
+      telemetrySocket.onclose=()=>{visual.connected=false;setTimeout(connect,retry);retry=Math.min(30000,retry*1.6)};
+      telemetrySocket.onerror=()=>telemetrySocket.close();
+    }catch(e){setTimeout(connect,retry);retry=Math.min(30000,retry*1.6)}
+  }
+  connect();
+}
+connectTelemetry();
+// Local MIDI is opt-in and is intended for development or a private control page.
+async function enableLocalMidi(){
+  if(!navigator.requestMIDIAccess)throw new Error('Web MIDI unavailable in this browser');
+  const access=await navigator.requestMIDIAccess({sysex:false});
+  const attach=()=>{
+    for(const input of access.inputs.values())input.onmidimessage=e=>{
+      const [status,data1,data2]=e.data,command=status&0xf0,channel=(status&0x0f)+1;
+      if(command===0x90)applyMidi({event:'note_on',note:data1,velocity:data2,channel});
+      else if(command===0x80)applyMidi({event:'note_off',note:data1,velocity:data2,channel});
+      else if(command===0xb0)applyMidi({event:'cc',controller:data1,value:data2,channel});
+      else if(command===0xe0)applyMidi({event:'pitch_bend',value:data1+data2*128,channel});
+    };
+  };
+  attach();access.onstatechange=attach;
+  return access;
+}
+window.TREE3={visual,receiveVisualMessage,enableLocalMidi};
+// GPU renderer prototype: v12 visual math translated into a vertex shader.
+const canvas=document.getElementById('art');
+const camera={yaw:.18,pitch:.38,zoom:1,vyaw:0,vpitch:0};
+const pointers=new Map();let lastGesture=null;
+const clamp=(v,lo,hi)=>Math.max(lo,Math.min(hi,v));
+function pointerDown(e){pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});canvas.setPointerCapture(e.pointerId);canvas.classList.add('rotating');lastGesture=null;e.preventDefault()}
+function pointerMove(e){
+ if(!pointers.has(e.pointerId))return;
+ const prev=pointers.get(e.pointerId);pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+ if(pointers.size===1){const dx=e.clientX-prev.x,dy=e.clientY-prev.y;camera.yaw+=dx*.006;camera.pitch=clamp(camera.pitch+dy*.006,-1.48,1.48);camera.vyaw=dx*.006;camera.vpitch=dy*.006;}
+ else if(pointers.size===2){const ps=[...pointers.values()],dist=Math.hypot(ps[0].x-ps[1].x,ps[0].y-ps[1].y);if(lastGesture)camera.zoom=clamp(camera.zoom*dist/lastGesture,.45,5);lastGesture=dist;}
+ e.preventDefault();
+}
+function pointerEnd(e){pointers.delete(e.pointerId);lastGesture=null;if(!pointers.size)canvas.classList.remove('rotating')}
+canvas.addEventListener('pointerdown',pointerDown);canvas.addEventListener('pointermove',pointerMove);
+canvas.addEventListener('pointerup',pointerEnd);canvas.addEventListener('pointercancel',pointerEnd);
+canvas.addEventListener('wheel',e=>{e.preventDefault();camera.zoom=clamp(camera.zoom*Math.exp(-e.deltaY*.001),.45,5)},{passive:false});
+canvas.addEventListener('dblclick',()=>{camera.yaw=.18;camera.pitch=.38;camera.zoom=1;camera.vyaw=0;camera.vpitch=0});
+const renderer=new THREE.WebGLRenderer({canvas,antialias:true,alpha:false,powerPreference:'high-performance'});
+renderer.setClearColor(0x080e1b,1);
+renderer.setPixelRatio(Math.min(devicePixelRatio||1,1.5));
+const scene=new THREE.Scene();
+const gpuCamera=new THREE.OrthographicCamera(-1,1,1,-1,.01,100);
+gpuCamera.position.z=10;
+function resize(){const w=canvas.clientWidth,h=canvas.clientHeight;renderer.setSize(w,h,false);const scale=Math.min(w*.39,h*.62);gpuCamera.left=-w/(2*scale);gpuCamera.right=w/(2*scale);gpuCamera.top=h/(2*scale);gpuCamera.bottom=-h/(2*scale);gpuCamera.updateProjectionMatrix()}
+addEventListener('resize',resize);resize();
+const rings=[
+ {rgb:[78,226,210],major:1.0,minor:.38,frequency:3,velocity:.19,twist:2,thickness:1.8,band:'bass',filaments:13},
+ {rgb:[175,158,255],major:.82,minor:.23,frequency:8,velocity:.36,twist:4,thickness:1.55,band:'mid',filaments:10},
+ {rgb:[245,178,125],major:.66,minor:.12,frequency:23,velocity:.62,twist:7,thickness:1.2,band:'high',filaments:8}
+];
+const vertexShader=`
+ precision highp float;
+ attribute vec3 aParams; // theta, filament phi, strand offset
+ uniform float uTime,uYaw,uPitch,uZoom,uBand,uBeat,uStructure,uPhase,uBassGlow;
+ uniform float uMajor,uMinor,uFrequency,uVelocity,uTwist,uMode,uRate,uGain;
+ varying float vDepth;
+ const float TAU=6.283185307179586;
+ void main(){
+   float theta=aParams.x;
+   float phi=aParams.y+uTwist*theta+uTime*uVelocity*.23;
+   float phase=theta*uFrequency-uTime*uVelocity;
+   float fundamental=sin(phase);
+   float original=1.+.085*fundamental+.028*(1.-.82*uStructure)*sin(theta*uFrequency*2.+uTime*.23);
+   float organize=1.-.50*uStructure;
+   float baseWaves=uFrequency*3.;
+   float speed=uTime*uVelocity*(2.4+uBand*2.5);
+   float wave=sin(theta*baseWaves-speed+phi*.7);
+   float ripple=sin(theta*(baseWaves*2.+5.)+speed*1.6+phi*1.3);
+   float arc=atan(sin(theta-uPhase),cos(theta-uPhase));
+   float strike=exp(-pow(arc/.38,2.));
+   float localOnset=uBeat;
+   float impulse=clamp(localOnset*.19*uBand,0.,1.);
+   float traveling=organize*((.060*uBand)*wave+(.035*uBand)*ripple);
+   float transient=organize*impulse*.42*strike;
+   float fine=organize*.012*uBand*sin(theta*(uFrequency*5.+7.)-uTime*uVelocity*7.+phi*1.7);
+   float upperFlutter=0.;
+   float musicalSine=0.;
+   if(uFrequency>15.){
+     upperFlutter=organize*uBeat*(.046*sin(theta*(uFrequency*2.+11.)-uTime*uVelocity*9.+phi*2.1)
+        +.030*sin(theta*(uFrequency*3.+15.)+uTime*uVelocity*12.-phi*1.6)
+        +.042*sin(theta*(uFrequency*3.+21.)-uTime*uVelocity*11.+phi*2.7));
+     float orangePulse=uBeat*.65;
+     musicalSine=.10*orangePulse*fundamental+.042*orangePulse*sin(phase*2.-uTime*uVelocity*1.5);
+   }
+   float bassWiggle=0.;
+   if(uFrequency<4.)bassWiggle=uBassGlow*(.040*sin(phase*1.7-uTime*.65+phi*.65)+.018*sin(theta*uFrequency*3.-uTime*1.8+phi*.5));
+   float r=uMinor*(original+traveling+transient+fine+upperFlutter+musicalSine+bassWiggle);
+   float a=uMajor+r*cos(phi)+(.012*uBand+.027*localOnset)*sin(theta*14.-speed);
+   vec3 pos=vec3(a*cos(theta),a*sin(theta),r*sin(phi));
+   float spatial=sin(uMode*theta+phi*.35);
+   float oscillation=sin(uTime*uRate+phi*.6);
+   float secondary=.18*sin((uMode+2.)*theta-uTime*uRate*.58+phi*.35);
+   float deflection=uMinor*uGain*uBand*(spatial*oscillation+secondary);
+   pos.xy+=vec2(cos(theta),sin(theta))*deflection*.72;
+   pos.z+=deflection*.69;
+   // Fan strands separate in the local cross-section (rather than screen space).
+   float fan=(uFrequency<4.?11.:5.8)*uBand*aParams.z*.0027;
+   pos.xy+=vec2(cos(theta),sin(theta))*fan;
+   pos.z+=fan*.40;
+   float cr=cos(uTime*.028),sr=sin(uTime*.028);
+   vec2 rot=vec2(pos.x*cr-pos.y*sr,pos.x*sr+pos.y*cr);
+   float yy=rot.y*sin(uPitch)+pos.z*cos(uPitch);
+   float zTilt=rot.y*cos(uPitch)-pos.z*sin(uPitch);
+   float xx=rot.x*cos(uYaw)+zTilt*sin(uYaw);
+   float zz=-rot.x*sin(uYaw)+zTilt*cos(uYaw);
+   float perspective=3.7/(3.7-zz*.22);
+   vDepth=clamp((zz+1.5)/3.,0.,1.);
+   gl_Position=projectionMatrix*modelViewMatrix*vec4(xx*perspective*uZoom,yy*perspective*uZoom,0.,1.);
+ }
+`;
+const fragmentShader=`
+ precision mediump float;
+ uniform vec3 uColor;
+ uniform float uBand,uAlpha,uBrightness;
+ varying float vDepth;
+ void main(){
+   float a=(.11+.42*vDepth)*uAlpha;
+   a*=1.+uBrightness*uBand;
+   gl_FragColor=vec4(uColor,min(.95,a));
+ }
+`;
+const materials=[];
+function makeLines(ring,k,offset,alpha,stepCount){
+ const values=[];
+ for(let j=0;j<ring.filaments;j++){
+   const phi=j/ring.filaments*Math.PI*2;
+   for(let i=0;i<stepCount;i++){
+     const t0=i/stepCount*Math.PI*2,t1=(i+1)/stepCount*Math.PI*2;
+     values.push(t0,phi,offset,t1,phi,offset);
+   }
+ }
+ const geometry=new THREE.BufferGeometry();
+ geometry.setAttribute('position',new THREE.BufferAttribute(new Float32Array(values.length),3));
+ geometry.setAttribute('aParams',new THREE.BufferAttribute(new Float32Array(values),3));
+ const u={
+   uTime:{value:0},uYaw:{value:0},uPitch:{value:0},uZoom:{value:1},
+   uBand:{value:0},uBeat:{value:0},uStructure:{value:0},uPhase:{value:0},uBassGlow:{value:0},
+   uMajor:{value:ring.major},uMinor:{value:ring.minor},uFrequency:{value:ring.frequency},
+   uVelocity:{value:ring.velocity},uTwist:{value:ring.twist},
+   uMode:{value:k===0?3:k===1?6:11},uRate:{value:k===0?5.8:k===1?9.5:14},
+   uGain:{value:k===0?.145:k===1?.105:.115},
+   uColor:{value:new THREE.Vector3(...ring.rgb.map(v=>v/255))},uAlpha:{value:alpha},
+   uBrightness:{value:k===0?2.2:k===1?2.0:3.1}
+ };
+ const material=new THREE.ShaderMaterial({uniforms:u,vertexShader,fragmentShader,transparent:true,depthWrite:false,depthTest:false,blending:THREE.NormalBlending});
+ const mesh=new THREE.LineSegments(geometry,material);mesh.frustumCulled=false;scene.add(mesh);materials.push({u,k});
+}
+for(let k=0;k<rings.length;k++){
+ const ring=rings[k];const steps=k===2?720:k===1?480:360;
+ makeLines(ring,k,0,.68,steps);
+ if(k<2){for(const offset of [-1,-.65,-.32,.32,.65,1])makeLines(ring,k,offset,.10,steps)}
+}
+function render(t){
+ const d=visual.dynamics;
+ for(const {u,k} of materials){
+  const ring=rings[k];
+  u.uTime.value=t;u.uYaw.value=camera.yaw;u.uPitch.value=camera.pitch;u.uZoom.value=camera.zoom;
+  u.uBand.value=clamp(d[ring.band],0,1);
+  u.uBeat.value=k===2?d.trebleBeat:clamp(bandOnsets[ring.band]*7,0,1);
+  u.uStructure.value=clamp(d.structure,0,1);u.uPhase.value=d.phase;
+  u.uBassGlow.value=d.bassGlow;
+ }
+ renderer.render(scene,gpuCamera);
+}
+// Diagnostics: open browser console and run TREE3.diagnostics() during playback.
+window.TREE3.diagnostics=()=>({analysisAvailable,audioContext:audioContext?.state,
+  raw:{...visual.audio},onsets:{...bandOnsets},dynamics:{...visual.dynamics},
+  playback:audio.paused?'paused':'playing'});
+const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+if(reduced){render(0)}else{
+ let prev=0;
+ function frame(ms){
+   const dt=Math.min(.05,(ms-prev)/1000||.016);prev=ms;
+    updateAudioAnalysis(dt);updateComposition(dt);
+   if(!pointers.size){
+     camera.yaw+=camera.vyaw*dt*60;camera.pitch=clamp(camera.pitch+camera.vpitch*dt*60,-1.48,1.48);
+     const decay=Math.pow(.90,dt*60);camera.vyaw*=decay;camera.vpitch*=decay;
+     // Quiet ambient motion after the user's spin comes to rest.
+     camera.yaw+=dt*.018;
+   }
+   render(ms*.001);requestAnimationFrame(frame);
+ }
+ requestAnimationFrame(frame);
+}
+</script>
+</body>
+</html>
