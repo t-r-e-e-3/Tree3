@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#080c16">
+<title>TREE(3)</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#070b14}body{font-family:system-ui,sans-serif}.scene{position:fixed;inset:0;background:radial-gradient(ellipse at 50% 48%,#172942 0%,#0c1729 48%,#070b14 100%)}canvas{display:block;width:100%;height:100%;touch-action:none;cursor:grab}canvas.rotating{cursor:grabbing}.controls{position:fixed;left:50%;top:calc(100% - 100px);transform:translateX(-50%);touch-action:none;user-select:none;cursor:grab;display:flex;align-items:center;gap:18px;padding:11px 19px;border:1px solid #a8c7e329;background:#091423b8;backdrop-filter:blur(22px);border-radius:999px;box-shadow:0 12px 45px #0006;transition:opacity .2s}.controls.dragging{cursor:grabbing}.control{touch-action:manipulation;appearance:none;border:0;background:none;color:#d9f4f5;display:grid;place-items:center;cursor:pointer;width:34px;height:34px;padding:0}.control svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.control.primary{width:46px;height:46px;background:#a8edf0;border-radius:50%;color:#081722}.control.primary svg{width:22px;height:22px}.control:focus-visible,input:focus-visible{outline:2px solid #b8f8f7;outline-offset:5px}.control:hover{color:#fff}.control.primary:hover{background:#d7ffff}.volume{touch-action:pan-x;width:96px;accent-color:#a8edf0;cursor:pointer}.hidden{display:none!important}@media(max-width:500px){.controls{gap:12px;padding:9px 14px}.volume{width:75px}}@media(prefers-reduced-motion:reduce){.controls{transition:none}}
+</style>
+</head>
+<body>
+<main class="scene"><canvas id="art" role="img" aria-label="Three nested luminous toroidal waveform structures: drone, harmony, and texture"></canvas></main>
+<div class="controls" id="controls" role="group" aria-label="Radio player controls" title="Drag empty space to reposition; double-click empty space to reset">
+<button class="control primary" id="play" aria-label="Play radio" title="Play or pause">
+<svg id="playIcon" viewBox="0 0 24 24"><path d="M9 6l10 6-10 6z" fill="currentColor" stroke="none"/></svg>
+</button>
+<button class="control" id="mute" aria-label="Mute audio" title="Mute or unmute">
+<svg id="speakerIcon" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M18.5 6a9 9 0 0 1 0 12"/></svg>
+</button>
+<input class="volume" id="volume" aria-label="Volume" type="range" min="0" max="1" step="0.01" value="0.75">
+</div>
+<audio id="stream" preload="none"></audio>
+<script>
+// After setting up your broadcast server, paste its direct HTTPS audio stream URL here.
+const STREAM_URL = "https://akasha.tree3.stream/listen/tree3/radio.mp3";
+// Leave null until Akasha has a secure, authenticated visual telemetry endpoint.
+const TELEMETRY_WS_URL = null; // e.g. "wss://akasha.tree3.stream/visuals"
+
+// Draggable player: grab the pill background, not its buttons or volume slider.
+const controls=document.getElementById('controls');
+const POSITION_KEY='shift-wave-player-position-v04';
+let drag=null;
+function setPlayerPosition(x,y){
+  const r=controls.getBoundingClientRect();
+  x=Math.max(0,Math.min(innerWidth-r.width,x));
+  y=Math.max(0,Math.min(innerHeight-r.height,y));
+  controls.style.left=x+'px';controls.style.top=y+'px';controls.style.transform='none';
+}
+function restorePlayer(){
+  try{const pos=JSON.parse(localStorage.getItem(POSITION_KEY));
+    if(pos&&Number.isFinite(pos.x)&&Number.isFinite(pos.y))setPlayerPosition(pos.x*innerWidth,pos.y*innerHeight);
+  }catch(e){}
+}
+controls.addEventListener('pointerdown',e=>{
+  if(e.target.closest('button,input'))return;
+  const r=controls.getBoundingClientRect();
+  drag={id:e.pointerId,dx:e.clientX-r.left,dy:e.clientY-r.top};
+  controls.setPointerCapture(e.pointerId);controls.classList.add('dragging');e.preventDefault();
+});
+controls.addEventListener('pointermove',e=>{if(drag&&e.pointerId===drag.id)setPlayerPosition(e.clientX-drag.dx,e.clientY-drag.dy)});
+function endDrag(e){if(!drag||e.pointerId!==drag.id)return;
+  drag=null;controls.classList.remove('dragging');
+  const r=controls.getBoundingClientRect();
+  try{localStorage.setItem(POSITION_KEY,JSON.stringify({x:r.left/innerWidth,y:r.top/innerHeight}))}catch(e){}
+}
+controls.addEventListener('pointerup',endDrag);controls.addEventListener('pointercancel',endDrag);
+controls.addEventListener('dblclick',e=>{if(e.target.closest('button,input'))return;
+  try{localStorage.removeItem(POSITION_KEY)}catch(e){}
+  controls.style.left='50%';controls.style.top='calc(100% - 100px)';controls.style.transform='translateX(-50%)';
+});
+addEventListener('resize',()=>{if(controls.style.transform==='none'){
+  const r=controls.getBoundingClientRect();setPlayerPosition(r.left,r.top)
+}});
+requestAnimationFrame(restorePlayer);
+const audio=document.getElementById('stream');
+const play=document.getElementById('play');
+const playIcon=document.getElementById('playIcon');
+const mute=document.getElementById('mute');
+const speakerIcon=document.getElementById('speakerIcon');
+const volume=document.getElementById('volume');
+const playSvg='<path d="M9 6l10 6-10 6z" fill="currentColor" stroke="none"/>';
+const pauseSvg='<path d="M8 5v14M16 5v14"/>';
+const speakerSvg='<path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M18.5 6a9 9 0 0 1 0 12"/>';
+const mutedSvg='<path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 9l5 6M22 9l-5 6"/>';
+function syncControls(){playIcon.innerHTML=audio.paused?playSvg:pauseSvg;play.setAttribute('aria-label',audio.paused?'Play radio':'Pause radio');speakerIcon.innerHTML=audio.muted||audio.volume===0?mutedSvg:speakerSvg;mute.setAttribute('aria-label',audio.muted?'Unmute audio':'Mute audio')}
+audio.volume=Number(volume.value);
+volume.addEventListener('input',()=>{audio.volume=Number(volume.value);audio.muted=false;syncControls()});
+mute.addEventListener('click',()=>{audio.muted=!audio.muted;syncControls()});
+// Browser-side audio analysis; only attach a MediaElementAudioSource after a CORS check.
+// Otherwise, attaching an analyzer to a cross-origin stream can result in silence.
+let audioContext=null, analyser=null, frequencyData=null, timeData=null;
+let streamPrepared=false, analysisAvailable=false;
+async function prepareStream(){
+  if(streamPrepared)return;
+  streamPrepared=true;
+  let corsOK=false;
+  try{
+    const response=await fetch(STREAM_URL,{mode:'cors',cache:'no-store',signal:AbortSignal.timeout(4500)});
+    corsOK=response.ok && response.type==='cors';
+    if(response.body)await response.body.cancel();
+  }catch(e){console.info('TREE(3): audio analysis unavailable (stream CORS); using normal playback.',e)}
+  if(corsOK && (window.AudioContext||window.webkitAudioContext)){
+    audio.crossOrigin='anonymous';
+    audio.src=STREAM_URL;
+    try{
+      audioContext=new (window.AudioContext||window.webkitAudioContext)();
+      const source=audioContext.createMediaElementSource(audio);
+      analyser=audioContext.createAnalyser();
+      analyser.fftSize=2048;analyser.smoothingTimeConstant=.82;
+      source.connect(analyser);analyser.connect(audioContext.destination);
+      frequencyData=new Uint8Array(analyser.frequencyBinCount);
+      timeData=new Uint8Array(analyser.fftSize);
+      analysisAvailable=true;
+      console.info('TREE(3): browser audio analysis enabled');
+    }catch(e){console.warn('TREE(3): analyzer setup failed',e)}
+  }else{
+    audio.removeAttribute('crossorigin');
+    audio.src=STREAM_URL;
+  }
+}
+play.addEventListener('click',async()=>{
+  if(!audio.paused){audio.pause();return}
+  if(!STREAM_URL)return;
+  try{
+    await prepareStream();
+    if(audioContext&&audioContext.state==='suspended')await audioContext.resume();
+    await audio.play();
+  }catch(err){console.error('Unable to play radio stream:',err)}
+});
+audio.addEventListener('play',syncControls);
+audio.addEventListener('pause',syncControls);
+audio.addEventListener('error',()=>{syncControls();console.error('Radio stream unavailable')});
+syncControls();
+
+// A single normalized visual state accepts audio, MIDI, and composition messages.
+const visual={
+  audio:{bass:0,mid:0,high:0,rms:0},
+  midi:{pulse:0,notes:new Map(),cc:new Map(),bend:0},
+  composition:{density:.35,tension:.25,brightness:.5,energy:.35,mode:'ambient'},
+  targets:{},
+  connected:false
+};
+function bandEnergy(low,high){
+  if(!analyser||!audioContext)return 0;
+  const binHz=audioContext.sampleRate/analyser.fftSize;
+  const lo=Math.max(0,Math.floor(low/binHz));
+  const hi=Math.min(frequencyData.length-1,Math.ceil(high/binHz));
+  let sum=0;
+  for(let i=lo;i<=hi;i++)sum+=frequencyData[i]/255;
+  return sum/Math.max(1,hi-lo+1);
+}
+function updateAudioAnalysis(dt){
+  const a=visual.audio;
+  if(analysisAvailable && !audio.paused && audioContext?.state==='running'){
+    analyser.getByteFrequencyData(frequencyData);
+    analyser.getByteTimeDomainData(timeData);
+    let sum=0;
+    for(let i=0;i<timeData.length;i++){const x=(timeData[i]-128)/128;sum+=x*x}
+    const targets={bass:bandEnergy(25,180),mid:bandEnergy(180,2200),high:bandEnergy(2200,11000),rms:Math.sqrt(sum/timeData.length)};
+    const alpha=1-Math.exp(-dt*10);
+    for(const key of Object.keys(targets))a[key]+=(targets[key]-a[key])*alpha;
+  }else{
+    const decay=Math.exp(-dt*3);
+    for(const key of Object.keys(a))a[key]*=decay;
+  }
+}
+function applyMidi(message){
+  if(!message || typeof message!=='object')return;
+  const event=message.event||message.subtype;
+  const note=Number(message.note),velocity=Number(message.velocity??0);
+  const channel=Number(message.channel??1);
+  if(event==='note_on' && velocity>0 && Number.isFinite(note)){
+    visual.midi.notes.set(channel+':'+note,Math.min(1,velocity/127));
+    visual.midi.pulse=Math.max(visual.midi.pulse,Math.min(1,velocity/127));
+  }else if((event==='note_off'||(event==='note_on'&&velocity===0))&&Number.isFinite(note)){
+    visual.midi.notes.delete(channel+':'+note);
+  }else if(event==='cc'){
+    const controller=Number(message.controller??message.cc),value=Number(message.value);
+    if(Number.isFinite(controller)&&Number.isFinite(value))visual.midi.cc.set(channel+':'+controller,Math.max(0,Math.min(1,value/127)));
+  }else if(event==='pitch_bend'){
+    const value=Number(message.value);
+    if(Number.isFinite(value))visual.midi.bend=Math.max(-1,Math.min(1,Math.abs(value)>1?(value-8192)/8192:value));
+  }
+}
+function applyComposition(message){
+  if(!message||typeof message!=='object')return;
+  for(const key of ['density','tension','brightness','energy']){
+    if(typeof message[key]==='number'&&Number.isFinite(message[key])){
+      visual.targets[key]=Math.max(0,Math.min(1,message[key]));
+    }
+  }
+  if(typeof message.mode==='string')visual.composition.mode=message.mode.slice(0,40);
+}
+function updateComposition(dt){
+  const alpha=1-Math.exp(-dt*.7);
+  for(const [key,value] of Object.entries(visual.targets))visual.composition[key]+=(value-visual.composition[key])*alpha;
+  visual.midi.pulse*=Math.exp(-dt*2.5);
+}
+// Future timestamped events can be scheduled against a measured audio playback offset.
+// Until that offset is measured, composition messages are intentionally slow-moving.
+function receiveVisualMessage(message){
+  if(!message||typeof message!=='object')return;
+  if(message.type==='composition')applyComposition(message);
+  if(message.type==='midi')applyMidi(message);
+}
+let telemetrySocket=null;
+function connectTelemetry(){
+  if(!TELEMETRY_WS_URL)return;
+  let retry=1500;
+  function connect(){
+    try{
+      telemetrySocket=new WebSocket(TELEMETRY_WS_URL);
+      telemetrySocket.onopen=()=>{visual.connected=true;retry=1500};
+      telemetrySocket.onmessage=e=>{
+        if(typeof e.data!=='string'||e.data.length>8192)return;
+        try{receiveVisualMessage(JSON.parse(e.data))}catch(err){console.warn('TREE(3): invalid visual message')}
+      };
+      telemetrySocket.onclose=()=>{visual.connected=false;setTimeout(connect,retry);retry=Math.min(30000,retry*1.6)};
+      telemetrySocket.onerror=()=>telemetrySocket.close();
+    }catch(e){setTimeout(connect,retry);retry=Math.min(30000,retry*1.6)}
+  }
+  connect();
+}
+connectTelemetry();
+// Local MIDI is opt-in and is intended for development or a private control page.
+async function enableLocalMidi(){
+  if(!navigator.requestMIDIAccess)throw new Error('Web MIDI unavailable in this browser');
+  const access=await navigator.requestMIDIAccess({sysex:false});
+  const attach=()=>{
+    for(const input of access.inputs.values())input.onmidimessage=e=>{
+      const [status,data1,data2]=e.data,command=status&0xf0,channel=(status&0x0f)+1;
+      if(command===0x90)applyMidi({event:'note_on',note:data1,velocity:data2,channel});
+      else if(command===0x80)applyMidi({event:'note_off',note:data1,velocity:data2,channel});
+      else if(command===0xb0)applyMidi({event:'cc',controller:data1,value:data2,channel});
+      else if(command===0xe0)applyMidi({event:'pitch_bend',value:data1+data2*128,channel});
+    };
+  };
+  attach();access.onstatechange=attach;
+  return access;
+}
+window.TREE3={visual,receiveVisualMessage,enableLocalMidi};
+const canvas=document.getElementById('art'),ctx=canvas.getContext('2d');let w=0,h=0,dpr=1;
+// Independent orbit controls: pointer drag changes 3D orientation; wheel/pinch zoom.
+// The audio player intercepts its own pointer events, so dragging it won't rotate the sculpture.
+const camera={yaw:.18,pitch:.38,zoom:1,vyaw:0,vpitch:0};
+const pointers=new Map();let lastGesture=null;
+const clamp=(v,lo,hi)=>Math.max(lo,Math.min(hi,v));
+function pointerDown(e){
+  pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});canvas.setPointerCapture(e.pointerId);
+  canvas.classList.add('rotating');lastGesture=null;e.preventDefault();
+}
+function pointerMove(e){
+  if(!pointers.has(e.pointerId))return;
+  const prev=pointers.get(e.pointerId);pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(pointers.size===1){
+    const dx=e.clientX-prev.x,dy=e.clientY-prev.y;
+    camera.yaw+=dx*.006;camera.pitch=clamp(camera.pitch+dy*.006,-1.48,1.48);
+    camera.vyaw=dx*.006;camera.vpitch=dy*.006;
+  }else if(pointers.size===2){
+    const ps=[...pointers.values()],dist=Math.hypot(ps[0].x-ps[1].x,ps[0].y-ps[1].y);
+    if(lastGesture&&lastGesture>0)camera.zoom=clamp(camera.zoom*dist/lastGesture,.45,2.4);
+    lastGesture=dist;
+  }
+  e.preventDefault();
+}
+function pointerEnd(e){pointers.delete(e.pointerId);lastGesture=null;if(!pointers.size)canvas.classList.remove('rotating')}
+canvas.addEventListener('pointerdown',pointerDown);
+canvas.addEventListener('pointermove',pointerMove);
+canvas.addEventListener('pointerup',pointerEnd);
+canvas.addEventListener('pointercancel',pointerEnd);
+canvas.addEventListener('wheel',e=>{e.preventDefault();camera.zoom=clamp(camera.zoom*Math.exp(-e.deltaY*.001),.45,2.4)},{passive:false});
+canvas.addEventListener('dblclick',()=>{camera.yaw=.18;camera.pitch=.38;camera.zoom=1;camera.vyaw=0;camera.vpitch=0});
+
+function resize(){dpr=Math.min(devicePixelRatio||1,2);w=canvas.clientWidth;h=canvas.clientHeight;canvas.width=Math.max(1,Math.round(w*dpr));canvas.height=Math.max(1,Math.round(h*dpr));ctx.setTransform(dpr,0,0,dpr,0,0)}
+addEventListener('resize',resize);resize();
+// Three visual frequency bands from the mixed stream (not isolated instrument stems).
+// MIDI and composition metadata provide additional visual expression.
+const rings=[
+ {rgb:[78,226,210],major:1.0,minor:.38,frequency:3,velocity:.19,twist:2,thickness:1.8,band:"bass"}, // drone
+ {rgb:[175,158,255],major:.82,minor:.23,frequency:8,velocity:.36,twist:4,thickness:1.55,band:"mid"}, // harmony
+ {rgb:[245,178,125],major:.66,minor:.12,frequency:23,velocity:.62,twist:7,thickness:1.2,band:"high"} // texture
+];
+function render(t){
+ ctx.clearRect(0,0,w,h);ctx.fillStyle='#080e1b';ctx.fillRect(0,0,w,h);
+ const bg=ctx.createRadialGradient(w*.5,h*.48,0,w*.5,h*.48,Math.max(w,h)*.73);
+ bg.addColorStop(0,'rgba(37,72,106,.34)');bg.addColorStop(.54,'rgba(16,33,61,.18)');bg.addColorStop(1,'rgba(8,14,27,0)');ctx.fillStyle=bg;ctx.fillRect(0,0,w,h);
+ const scale=Math.min(w*.39,h*.62)*camera.zoom,cx=w*.5,cy=h*.50;
+ const tilt=camera.pitch,rotation=t*.028;
+ const yaw=camera.yaw; // User-controlled 3D orientation; toroidal filament motion stays independent
+ // 3D point on a modulated torus, projected with a gently tilting camera.
+ function point(theta,phi,ring){
+   const band=visual.audio[ring.band];
+    const energy=clamp(band*2.7+visual.audio.rms*.9,0,1);
+    const midiPulse=visual.midi.pulse;
+    const density=visual.composition.density;
+    const modulation=1+(.055+.19*energy+.045*midiPulse)*Math.sin(theta*ring.frequency-t*ring.velocity*(1+energy*.8))
+      +(.015+.035*density)*Math.sin(theta*ring.frequency*2+t*.23);
+   const r=ring.minor*modulation;
+   const a=ring.major+r*Math.cos(phi);
+   let x=a*Math.cos(theta),y=a*Math.sin(theta),z=r*Math.sin(phi);
+   const cr=Math.cos(rotation),sr=Math.sin(rotation);const xr=x*cr-y*sr,yr=x*sr+y*cr;
+   const yy=yr*Math.sin(tilt)+z*Math.cos(tilt),zTilt=yr*Math.cos(tilt)-z*Math.sin(tilt);
+   const xx=xr*Math.cos(yaw)+zTilt*Math.sin(yaw);
+   const zz=-xr*Math.sin(yaw)+zTilt*Math.cos(yaw);
+   const perspective=3.7/(3.7-zz*.22);
+   return {x:cx+xx*scale*perspective,y:cy+yy*scale*perspective,z:zz};
+ }
+ // Interleaved depth-sorted line segments make the rings feel like one object.
+ const segments=[];
+ for(let k=0;k<rings.length;k++){
+   const ring=rings[k],filaments=k===0?13:k===1?10:8,steps=190;
+   for(let j=0;j<filaments;j++){
+     const phi=j/filaments*Math.PI*2;
+     for(let i=0;i<steps;i++){
+       const th=i/steps*Math.PI*2,th2=(i+1)/steps*Math.PI*2;
+       const phi1=phi+ring.twist*th+t*ring.velocity*.23;
+       const phi2=phi+ring.twist*th2+t*ring.velocity*.23;
+       const a=point(th,phi1,ring),b=point(th2,phi2,ring);
+       segments.push({a,b,depth:(a.z+b.z)*.5,k,j});
+     }
+   }
+ }
+ segments.sort((a,b)=>a.depth-b.depth);
+ ctx.lineCap='round';
+ for(const seg of segments){
+   const ring=rings[seg.k],[r,g,b]=ring.rgb;
+   const near=Math.max(0,Math.min(1,(seg.depth+1.5)/3));
+   const band=visual.audio[ring.band];
+    const intensity=clamp(band*2.5+visual.audio.rms+visual.midi.pulse*.35,0,1);
+    const alpha=(.11+.42*near)*(seg.j%3===0?1:.55)*(.65+intensity*.65);
+   ctx.beginPath();ctx.moveTo(seg.a.x,seg.a.y);ctx.lineTo(seg.b.x,seg.b.y);
+   ctx.strokeStyle=`rgba(${r},${g},${b},${alpha*.13})`;ctx.lineWidth=ring.thickness*6;ctx.stroke();
+   ctx.strokeStyle=`rgba(${r},${g},${b},${alpha})`;ctx.lineWidth=ring.thickness;ctx.stroke();
+ }
+ // Thin highlight threads preserve the glowing line aesthetic of v0.5.
+ for(const ring of rings){
+   ctx.beginPath();const N=450;
+   for(let i=0;i<=N;i++){
+     const th=i/N*Math.PI*2,phi=ring.twist*th+t*ring.velocity*.23;
+     const p=point(th,phi,ring);if(i===0)ctx.moveTo(p.x,p.y);else ctx.lineTo(p.x,p.y);
+   }
+   const [r,g,b]=ring.rgb;
+    const highlight=clamp(.5+visual.audio[ring.band]*1.2+visual.midi.pulse*.25,.3,1);
+    ctx.strokeStyle=`rgba(${r},${g},${b},${highlight})`;ctx.lineWidth=ring.thickness;ctx.stroke();
+ }
+}
+const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+if(reduced){render(0)}else{
+ let prev=0;
+ function frame(ms){
+   const dt=Math.min(.05,(ms-prev)/1000||.016);prev=ms;
+    updateAudioAnalysis(dt);updateComposition(dt);
+   if(!pointers.size){
+     camera.yaw+=camera.vyaw*dt*60;camera.pitch=clamp(camera.pitch+camera.vpitch*dt*60,-1.48,1.48);
+     const decay=Math.pow(.90,dt*60);camera.vyaw*=decay;camera.vpitch*=decay;
+     // Quiet ambient motion after the user's spin comes to rest.
+     camera.yaw+=dt*.018;
+   }
+   render(ms*.001);requestAnimationFrame(frame);
+ }
+ requestAnimationFrame(frame);
+}
+</script>
+</body>
+</html>
