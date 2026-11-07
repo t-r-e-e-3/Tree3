@@ -1,0 +1,690 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#080c16">
+<title>TREE(3) — Hybrid v11 · Audio Sync Diagnostics</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#070b14}body{font-family:system-ui,sans-serif}.scene{position:fixed;inset:0;background:radial-gradient(ellipse at 50% 48%,#172942 0%,#0c1729 48%,#070b14 100%)}canvas{display:block;width:100%;height:100%;touch-action:none;cursor:grab}canvas.rotating{cursor:grabbing}.controls{position:fixed;left:50%;top:calc(100% - 100px);transform:translateX(-50%);touch-action:none;user-select:none;cursor:grab;display:flex;align-items:center;gap:18px;padding:11px 19px;border:1px solid #a8c7e329;background:#091423b8;backdrop-filter:blur(22px);border-radius:999px;box-shadow:0 12px 45px #0006;transition:opacity .2s}.controls.dragging{cursor:grabbing}.control{touch-action:manipulation;appearance:none;border:0;background:none;color:#d9f4f5;display:grid;place-items:center;cursor:pointer;width:34px;height:34px;padding:0}.control svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}.control.primary{width:46px;height:46px;background:#a8edf0;border-radius:50%;color:#081722}.control.primary svg{width:22px;height:22px}.control:focus-visible,input:focus-visible{outline:2px solid #b8f8f7;outline-offset:5px}.control:hover{color:#fff}.control.primary:hover{background:#d7ffff}.volume{touch-action:pan-x;width:96px;accent-color:#a8edf0;cursor:pointer}.hidden{display:none!important}@media(max-width:500px){.controls{gap:12px;padding:9px 14px}.volume{width:75px}}@media(prefers-reduced-motion:reduce){.controls{transition:none}}
+#halo{position:fixed;inset:0;width:100%;height:100%;pointer-events:none;mix-blend-mode:normal;opacity:1;z-index:1}.controls{z-index:3}
+#haloToggle{position:fixed;right:18px;bottom:20px;z-index:5;background:#0b1827dd;color:#b6d9e5;border:1px solid #69859b66;border-radius:20px;padding:9px 13px;cursor:pointer;font:12px system-ui,sans-serif}#haloToggle:hover{background:#20334a}
+
+#diagnostics{position:fixed;left:16px;top:16px;z-index:8;width:min(360px,calc(100vw - 32px));padding:14px;border-radius:13px;background:#071321eb;border:1px solid #67839988;color:#e3eff5;font:12px system-ui,sans-serif;backdrop-filter:blur(14px);box-shadow:0 12px 36px #0008}
+#diagnostics h2{margin:0 0 8px;font-size:14px}#diagnostics .status{font-size:11px;color:#afc5d5;margin-bottom:10px;line-height:1.45}
+.diagRow{display:grid;grid-template-columns:54px 1fr 44px;align-items:center;gap:8px;margin:9px 0}.diagBars{display:grid;gap:3px}.diagTrack{height:7px;border-radius:4px;background:#243546;overflow:hidden}.diagFill{height:100%;width:0%;transition:none}.diagRaw{opacity:.6}.diagNumbers{font-variant-numeric:tabular-nums;text-align:right;color:#bdd0de;font-size:10px}.diagButtons{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}.diagButtons button{border:1px solid #59758a;background:#182c40;color:#d5e9f2;padding:6px 8px;border-radius:6px;cursor:pointer;font-size:11px}.diagFoot{margin-top:9px;font-size:10px;line-height:1.5;color:#a7baca}.diagHit{font-weight:700;opacity:.35}.diagHit.fired{opacity:1;color:#fff}
+</style>
+</head>
+<body>
+<main class="scene"><canvas id="art" role="img" aria-label="Three nested luminous toroidal waveform structures: drone, harmony, and texture"></canvas><canvas id="halo" aria-hidden="true"></canvas></main><button id="haloToggle" type="button" aria-pressed="false">GPU plucks: ON</button>
+<div class="controls" id="controls" role="group" aria-label="Radio player controls" title="Drag empty space to reposition; double-click empty space to reset">
+<button class="control primary" id="play" aria-label="Play radio" title="Play or pause">
+<svg id="playIcon" viewBox="0 0 24 24"><path d="M9 6l10 6-10 6z" fill="currentColor" stroke="none"/></svg>
+</button>
+<button class="control" id="mute" aria-label="Mute audio" title="Mute or unmute">
+<svg id="speakerIcon" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M18.5 6a9 9 0 0 1 0 12"/></svg>
+</button>
+<input class="volume" id="volume" aria-label="Volume" type="range" min="0" max="1" step="0.01" value="0.75">
+</div>
+<audio id="stream" preload="none"></audio>
+<section id="diagnostics" aria-label="Live audio synchronization diagnostics"><h2>Audio → GPU diagnostic monitor · v10</h2><div id="diagStatus" class="status">Press Play to initialize audio analysis.</div>
+<div id="diagRows"></div><div class="diagButtons"><button id="diagTestBass">Test bass pluck</button><button id="diagTestMid">Test mid pluck</button><button id="diagTestHigh">Test treble pluck</button><button id="diagHide">Hide panel</button></div>
+<div class="diagFoot">Top: raw energy · middle: spectral rise · bottom: attack amplitude delivered to GPU. HIT counts indicate events actually sent to the GPU. Test buttons trigger visual events only (no sound).</div></section>
+<button id="diagShow" style="display:none;position:fixed;left:16px;top:16px;z-index:9;background:#10283d;color:white;border:1px solid #68879b;border-radius:8px;padding:8px 12px;cursor:pointer">Show audio diagnostics</button>
+<script>
+// After setting up your broadcast server, paste its direct HTTPS audio stream URL here.
+const STREAM_URL = "https://akasha.tree3.stream/listen/tree3/radio.mp3";
+// Leave null until Akasha has a secure, authenticated visual telemetry endpoint.
+const TELEMETRY_WS_URL = null; // e.g. "wss://akasha.tree3.stream/visuals"
+
+// Draggable player: grab the pill background, not its buttons or volume slider.
+const controls=document.getElementById('controls');
+const POSITION_KEY='shift-wave-player-position-v04';
+let drag=null;
+function setPlayerPosition(x,y){
+  const r=controls.getBoundingClientRect();
+  x=Math.max(0,Math.min(innerWidth-r.width,x));
+  y=Math.max(0,Math.min(innerHeight-r.height,y));
+  controls.style.left=x+'px';controls.style.top=y+'px';controls.style.transform='none';
+}
+function restorePlayer(){
+  try{const pos=JSON.parse(localStorage.getItem(POSITION_KEY));
+    if(pos&&Number.isFinite(pos.x)&&Number.isFinite(pos.y))setPlayerPosition(pos.x*innerWidth,pos.y*innerHeight);
+  }catch(e){}
+}
+controls.addEventListener('pointerdown',e=>{
+  if(e.target.closest('button,input'))return;
+  const r=controls.getBoundingClientRect();
+  drag={id:e.pointerId,dx:e.clientX-r.left,dy:e.clientY-r.top};
+  controls.setPointerCapture(e.pointerId);controls.classList.add('dragging');e.preventDefault();
+});
+controls.addEventListener('pointermove',e=>{if(drag&&e.pointerId===drag.id)setPlayerPosition(e.clientX-drag.dx,e.clientY-drag.dy)});
+function endDrag(e){if(!drag||e.pointerId!==drag.id)return;
+  drag=null;controls.classList.remove('dragging');
+  const r=controls.getBoundingClientRect();
+  try{localStorage.setItem(POSITION_KEY,JSON.stringify({x:r.left/innerWidth,y:r.top/innerHeight}))}catch(e){}
+}
+controls.addEventListener('pointerup',endDrag);controls.addEventListener('pointercancel',endDrag);
+controls.addEventListener('dblclick',e=>{if(e.target.closest('button,input'))return;
+  try{localStorage.removeItem(POSITION_KEY)}catch(e){}
+  controls.style.left='50%';controls.style.top='calc(100% - 100px)';controls.style.transform='translateX(-50%)';
+});
+addEventListener('resize',()=>{if(controls.style.transform==='none'){
+  const r=controls.getBoundingClientRect();setPlayerPosition(r.left,r.top)
+}});
+requestAnimationFrame(restorePlayer);
+const audio=document.getElementById('stream');
+const play=document.getElementById('play');
+const playIcon=document.getElementById('playIcon');
+const mute=document.getElementById('mute');
+const speakerIcon=document.getElementById('speakerIcon');
+const volume=document.getElementById('volume');
+const playSvg='<path d="M9 6l10 6-10 6z" fill="currentColor" stroke="none"/>';
+const pauseSvg='<path d="M8 5v14M16 5v14"/>';
+const speakerSvg='<path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M18.5 6a9 9 0 0 1 0 12"/>';
+const mutedSvg='<path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M17 9l5 6M22 9l-5 6"/>';
+function syncControls(){playIcon.innerHTML=audio.paused?playSvg:pauseSvg;play.setAttribute('aria-label',audio.paused?'Play radio':'Pause radio');speakerIcon.innerHTML=audio.muted||audio.volume===0?mutedSvg:speakerSvg;mute.setAttribute('aria-label',audio.muted?'Unmute audio':'Mute audio')}
+audio.volume=Number(volume.value);
+volume.addEventListener('input',()=>{audio.volume=Number(volume.value);audio.muted=false;syncControls()});
+mute.addEventListener('click',()=>{audio.muted=!audio.muted;syncControls()});
+// Browser-side audio analysis; only attach a MediaElementAudioSource after a CORS check.
+// Otherwise, attaching an analyzer to a cross-origin stream can result in silence.
+let audioContext=null, analyser=null, frequencyData=null, timeData=null;
+let streamPrepared=false, analysisAvailable=false;
+async function prepareStream(){
+  if(streamPrepared)return;
+  streamPrepared=true;
+  let corsOK=false;
+  try{
+    const response=await fetch(STREAM_URL,{mode:'cors',cache:'no-store',signal:AbortSignal.timeout(4500)});
+    corsOK=response.ok && response.type==='cors';
+    if(response.body)await response.body.cancel();
+  }catch(e){console.info('TREE(3): audio analysis unavailable (stream CORS); using normal playback.',e)}
+  if(corsOK && (window.AudioContext||window.webkitAudioContext)){
+    audio.crossOrigin='anonymous';
+    audio.src=STREAM_URL;
+    try{
+      audioContext=new (window.AudioContext||window.webkitAudioContext)();
+      const source=audioContext.createMediaElementSource(audio);
+      analyser=audioContext.createAnalyser();
+      analyser.fftSize=2048;analyser.smoothingTimeConstant=.06;
+      source.connect(analyser);analyser.connect(audioContext.destination);
+      frequencyData=new Uint8Array(analyser.frequencyBinCount);
+      timeData=new Uint8Array(analyser.fftSize);
+      analysisAvailable=true;
+      console.info('TREE(3): browser audio analysis enabled');
+    }catch(e){console.warn('TREE(3): analyzer setup failed',e)}
+  }else{
+    audio.removeAttribute('crossorigin');
+    audio.src=STREAM_URL;
+  }
+}
+play.addEventListener('click',async()=>{
+  if(!audio.paused){audio.pause();return}
+  if(!STREAM_URL)return;
+  try{
+    await prepareStream();
+    if(audioContext&&audioContext.state==='suspended')await audioContext.resume();
+    await audio.play();
+  }catch(err){console.error('Unable to play radio stream:',err)}
+});
+audio.addEventListener('play',syncControls);
+audio.addEventListener('pause',syncControls);
+audio.addEventListener('error',()=>{syncControls();console.error('Radio stream unavailable')});
+syncControls();
+
+// A single normalized visual state accepts audio, MIDI, and composition messages.
+const visual={
+  audio:{bass:0,mid:0,high:0,rms:0},
+  midi:{pulse:0,notes:new Map(),cc:new Map(),bend:0},
+  composition:{density:.35,tension:.25,brightness:.5,energy:.35,mode:'ambient'},
+  targets:{},
+  connected:false,
+  dynamics:{bass:0,mid:0,high:0,level:0,hit:0,crash:0,silence:0,phase:0,flux:0,lowMid:0,presence:0,air:0,brightPulse:0,trebleBeat:0,bassGlow:0,structure:0}
+};
+const previousSpectrum=new Float32Array(1024);
+const envelopes={bass:.08,mid:.08,high:.08,presence:.08,air:.08};
+const bandOnsets={bass:0,mid:0,high:0};
+let prevLevel=0,prevHigh=0,transientCooldown=0,crashCooldown=0;
+let trebleNoiseFloor=0;
+const diag={raw:{bass:0,mid:0,high:0},hits:{bass:0,mid:0,high:0},lastHit:{bass:0,mid:0,high:0},frames:0};
+const diagRows=document.getElementById('diagRows');
+for(const [key,color] of [['bass','#4ee2d2'],['mid','#af9eff'],['high','#f5b27d']]){
+ const row=document.createElement('div');row.className='diagRow';row.innerHTML=`<div><b style="color:${color}">${key.toUpperCase()}</b><div id="hit-${key}" class="diagHit">HIT</div></div><div class="diagBars"><div class="diagTrack"><div id="raw-${key}" class="diagFill diagRaw" style="background:${color}"></div></div><div class="diagTrack"><div id="flux-${key}" class="diagFill" style="background:${color}"></div></div><div class="diagTrack"><div id="pluck-${key}" class="diagFill" style="background:${color}"></div></div></div><div id="number-${key}" class="diagNumbers">0.000</div>`;diagRows.appendChild(row);
+}
+for(const key of ['bass','mid','high'])document.getElementById('diagTest'+(key==='high'?'High':key==='mid'?'Mid':'Bass')).addEventListener('click',()=>{
+ fireGPUHit(key,1);
+});
+document.getElementById('diagHide').onclick=()=>{document.getElementById('diagnostics').style.display='none';document.getElementById('diagShow').style.display='block'};
+document.getElementById('diagShow').onclick=()=>{document.getElementById('diagnostics').style.display='block';document.getElementById('diagShow').style.display='none'};
+function refreshDiagnostics(){
+ const active=analysisAvailable&&!audio.paused&&audioContext?.state==='running';
+ const status=document.getElementById('diagStatus');
+ status.textContent=`Stream: ${audio.paused?'paused':'playing'} | Analyzer: ${analysisAvailable?'connected':'UNAVAILABLE'} | AudioContext: ${audioContext?.state||'not initialized'} | GPU: ${haloReady?'ready':'unavailable'} / ${haloEnabled?'on':'off'} | RMS: ${visual.audio.rms.toFixed(4)}${!analysisAvailable?' — Check CORS / console':''}`;
+ for(const key of ['bass','mid','high']){
+  const raw=diag.raw[key],flux=bandOnsets[key],pluck=stringMotion[key].pluck;
+  document.getElementById('raw-'+key).style.width=(Math.min(1,raw*3)*100)+'%';
+  document.getElementById('flux-'+key).style.width=(Math.min(1,flux*35)*100)+'%';
+  document.getElementById('pluck-'+key).style.width=(Math.min(1,pluck)*100)+'%';
+  document.getElementById('number-'+key).textContent=raw.toFixed(3)+' / '+diag.hits[key]+' hits';
+  document.getElementById('hit-'+key).classList.toggle('fired',performance.now()-diag.lastHit[key]<160);
+ }
+}
+setInterval(refreshDiagnostics,65);
+
+function bandEnergy(low,high){
+  if(!analyser||!audioContext)return 0;
+  const binHz=audioContext.sampleRate/analyser.fftSize;
+  const lo=Math.max(0,Math.floor(low/binHz));
+  const hi=Math.min(frequencyData.length-1,Math.ceil(high/binHz));
+  let sum=0;
+  for(let i=lo;i<=hi;i++)sum+=frequencyData[i]/255;
+  return sum/Math.max(1,hi-lo+1);
+}
+// Independent musical envelopes: sustained energy affects optical weight;
+// spectral attacks excite damped transverse string modes.
+const stringMotion={
+ bass:{pluck:0,phase:0,previous:0,noise:0,cooldown:0,age:99,origin:.14},
+ mid:{pluck:0,phase:0,previous:0,noise:0,cooldown:0,age:99,origin:.44},
+ high:{pluck:0,phase:0,previous:0,noise:0,cooldown:0,age:99,origin:.72}
+};
+// v14: restored proven v11 rendering pipeline; instantaneous impulse, fast exponential release.
+// The displayed HIT counter records the exact event delivered to the shader.
+const attackTuning={
+ bass:{floor:.014,fluxGain:32,riseGain:3.2,cooldown:.18,decay:7.0},
+ mid:{floor:.011,fluxGain:46,riseGain:3.8,cooldown:.15,decay:8.0},
+ high:{floor:.005,fluxGain:85,riseGain:5.0,cooldown:.12,decay:9.0}
+};
+function fireGPUHit(key,strength){
+ const m=stringMotion[key];
+ m.pluck=Math.min(1,Math.max(.95,strength)); // immediate full-amplitude attack; no ramp
+ m.age=0;m.phase=0;m.origin=(m.origin+.287)%1;
+ m.cooldown=attackTuning[key].cooldown;
+ diag.hits[key]++;diag.lastHit[key]=performance.now();
+}
+function advanceStringMotion(dt,raw,flux,active){
+ for(const key of ['bass','mid','high']){
+  const m=stringMotion[key],cfg=attackTuning[key];
+  const level=active?raw[key]:0;
+  const rise=Math.max(0,level-m.previous);
+  m.previous=level;
+  m.cooldown=Math.max(0,m.cooldown-dt);
+  m.age+=dt;m.phase+=dt*(key==='bass'?22:key==='mid'?32:45);
+  m.pluck*=Math.exp(-dt*cfg.decay);
+  // Spectral flux is computed from unsmoothed FFT bins on THIS frame.
+  const strength=flux[key]*cfg.fluxGain+rise*cfg.riseGain;
+  m.noise=strength; // debug meter for direct attack strength
+  if(active&&m.cooldown<=0&&strength>cfg.floor){
+    fireGPUHit(key,strength*3.0);
+  }
+ }
+}
+function updateAudioAnalysis(dt){
+  const d=visual.dynamics, a=visual.audio;
+  transientCooldown=Math.max(0,transientCooldown-dt);
+  crashCooldown=Math.max(0,crashCooldown-dt);
+  if(analysisAvailable && !audio.paused && audioContext?.state==='running'){
+    analyser.getByteFrequencyData(frequencyData);
+    analyser.getByteTimeDomainData(timeData);
+    let power=0;
+    for(let i=0;i<timeData.length;i++){
+      const v=(timeData[i]-128)/128;power+=v*v;
+    }
+    const rms=Math.sqrt(power/timeData.length);
+    // Fast attack and slow release preserve the shape of cymbal crashes and kicks.
+    const raw={
+      bass:bandEnergy(30,179), mid:bandEnergy(180,2199), high:bandEnergy(2200,11000),
+      presence:bandEnergy(850,4200), air:bandEnergy(4200,11000), rms
+    };
+    for(const key of ['bass','mid','high'])diag.raw[key]=raw[key];
+    for(const key of Object.keys(raw)){
+      const rate=raw[key]>a[key]?32:6;
+      a[key]+=(raw[key]-a[key])*(1-Math.exp(-dt*rate));
+    }
+    // Spectral flux identifies sudden new frequency content, even on loud recordings.
+    // Exclusive FFT-bin assignment. Each bin contributes to exactly one ring.
+    const rises={bass:0,mid:0,high:0},counts={bass:0,mid:0,high:0};
+    const hz=audioContext.sampleRate/analyser.fftSize;
+    for(let i=1;i<frequencyData.length;i++){
+      const freq=i*hz;
+      const key=freq<180?'bass':freq<2200?'mid':'high';
+      const magnitude=frequencyData[i]/255;
+      rises[key]+=Math.max(0,magnitude-previousSpectrum[i]);
+      counts[key]++;
+      previousSpectrum[i]=magnitude;
+    }
+    for(const key of ['bass','mid','high'])bandOnsets[key]=rises[key]/Math.max(1,counts[key]);
+    const flux=bandOnsets.bass+bandOnsets.mid+bandOnsets.high;
+    advanceStringMotion(dt,raw,bandOnsets,true);
+    const highFlux=bandOnsets.high;
+    // Adaptive scaling: quiet ambient recordings should still animate.
+    for(const key of ['bass','mid','high','presence','air']){
+      const target=Math.max(.025,raw[key]);
+      const rate=target>envelopes[key]?1.5:.11;
+      envelopes[key]+=(target-envelopes[key])*(1-Math.exp(-dt*rate));
+      const normalized=Math.max(0,(raw[key]-.025)/Math.max(.16,envelopes[key]*2.4));
+      d[key]+=(Math.min(1,normalized)-d[key])*(1-Math.exp(-dt*(normalized>d[key]?19:4.5)));
+    }
+    // Each ring is exclusively controlled by its own spectral band.
+    d.lowMid=d.mid;
+    d.brightPulse=d.mid;
+    const level=Math.min(1.6,rms/.14);
+    d.level+=(level-d.level)*(1-Math.exp(-dt*(level>d.level?26:7)));
+    const highAttack=Math.max(0,raw.high-prevHigh);
+    prevLevel=rms;prevHigh=raw.high;
+    // Orange: rapid rise detection from HIGH bins only, with a short decay.
+    // No overall RMS, bass or midrange contribution to the orange onset.
+    const trebleAttack=clamp(highFlux*16+highAttack*4.8,0,1);
+    trebleNoiseFloor+=(trebleAttack-trebleNoiseFloor)*(1-Math.exp(-dt*(trebleAttack>trebleNoiseFloor?1.0:2.2)));
+    const onsetStrength=Math.max(0,trebleAttack-trebleNoiseFloor*1.15-.012);
+    const beatTarget=clamp(onsetStrength*3.0,0,1);
+    d.trebleBeat+=(beatTarget-d.trebleBeat)*(1-Math.exp(-dt*(beatTarget>d.trebleBeat?115:37)));
+    // No cross-band hit/crash triggers: local ring onsets are used below.
+    d.hit=0;d.crash=0;
+    d.flux=flux;
+    // A fast silence gate makes pauses visually meaningful.
+    const active= Math.max(rms/.022,raw.high/.07,raw.mid/.06);
+    const silenceTarget=active<.38?1:0;
+    d.silence+=(silenceTarget-d.silence)*(1-Math.exp(-dt*(silenceTarget?9:16)));
+    const structureTarget=clamp(.56*d.mid+.35*d.bass+.20*d.high,0,1);
+    d.structure+=(structureTarget-d.structure)*(1-Math.exp(-dt*(structureTarget>d.structure?7:4)));
+    const bassTarget=clamp(d.bass,0,1);
+    d.bassGlow+=(bassTarget-d.bassGlow)*(1-Math.exp(-dt*(bassTarget>d.bassGlow?24:8)));
+  }else{
+    for(const key of ['bass','mid','high'])diag.raw[key]=0;
+    advanceStringMotion(dt,{bass:0,mid:0,high:0},{bass:0,mid:0,high:0},false);
+    for(const key of Object.keys(a))a[key]*=Math.exp(-dt*5);
+    for(const key of ['bass','mid','high','presence','air','lowMid','brightPulse','level','trebleBeat','bassGlow','structure'])d[key]*=Math.exp(-dt*5);
+    d.silence+=(1-d.silence)*(1-Math.exp(-dt*5));
+  }
+  d.hit*=Math.exp(-dt*15);
+  d.crash*=Math.exp(-dt*10);
+  d.phase+=dt*(.35+d.mid*1.8);
+}
+function applyMidi(message){
+  if(!message || typeof message!=='object')return;
+  const event=message.event||message.subtype;
+  const note=Number(message.note),velocity=Number(message.velocity??0);
+  const channel=Number(message.channel??1);
+  if(event==='note_on' && velocity>0 && Number.isFinite(note)){
+    visual.midi.notes.set(channel+':'+note,Math.min(1,velocity/127));
+    visual.midi.pulse=Math.max(visual.midi.pulse,Math.min(1,velocity/127));
+  }else if((event==='note_off'||(event==='note_on'&&velocity===0))&&Number.isFinite(note)){
+    visual.midi.notes.delete(channel+':'+note);
+  }else if(event==='cc'){
+    const controller=Number(message.controller??message.cc),value=Number(message.value);
+    if(Number.isFinite(controller)&&Number.isFinite(value))visual.midi.cc.set(channel+':'+controller,Math.max(0,Math.min(1,value/127)));
+  }else if(event==='pitch_bend'){
+    const value=Number(message.value);
+    if(Number.isFinite(value))visual.midi.bend=Math.max(-1,Math.min(1,Math.abs(value)>1?(value-8192)/8192:value));
+  }
+}
+function applyComposition(message){
+  if(!message||typeof message!=='object')return;
+  for(const key of ['density','tension','brightness','energy']){
+    if(typeof message[key]==='number'&&Number.isFinite(message[key])){
+      visual.targets[key]=Math.max(0,Math.min(1,message[key]));
+    }
+  }
+  if(typeof message.mode==='string')visual.composition.mode=message.mode.slice(0,40);
+}
+function updateComposition(dt){
+  const alpha=1-Math.exp(-dt*.7);
+  for(const [key,value] of Object.entries(visual.targets))visual.composition[key]+=(value-visual.composition[key])*alpha;
+  visual.midi.pulse*=Math.exp(-dt*10);
+}
+// Future timestamped events can be scheduled against a measured audio playback offset.
+// Until that offset is measured, composition messages are intentionally slow-moving.
+function receiveVisualMessage(message){
+  if(!message||typeof message!=='object')return;
+  if(message.type==='composition')applyComposition(message);
+  if(message.type==='midi')applyMidi(message);
+}
+let telemetrySocket=null;
+function connectTelemetry(){
+  if(!TELEMETRY_WS_URL)return;
+  let retry=1500;
+  function connect(){
+    try{
+      telemetrySocket=new WebSocket(TELEMETRY_WS_URL);
+      telemetrySocket.onopen=()=>{visual.connected=true;retry=1500};
+      telemetrySocket.onmessage=e=>{
+        if(typeof e.data!=='string'||e.data.length>8192)return;
+        try{receiveVisualMessage(JSON.parse(e.data))}catch(err){console.warn('TREE(3): invalid visual message')}
+      };
+      telemetrySocket.onclose=()=>{visual.connected=false;setTimeout(connect,retry);retry=Math.min(30000,retry*1.6)};
+      telemetrySocket.onerror=()=>telemetrySocket.close();
+    }catch(e){setTimeout(connect,retry);retry=Math.min(30000,retry*1.6)}
+  }
+  connect();
+}
+connectTelemetry();
+// Local MIDI is opt-in and is intended for development or a private control page.
+async function enableLocalMidi(){
+  if(!navigator.requestMIDIAccess)throw new Error('Web MIDI unavailable in this browser');
+  const access=await navigator.requestMIDIAccess({sysex:false});
+  const attach=()=>{
+    for(const input of access.inputs.values())input.onmidimessage=e=>{
+      const [status,data1,data2]=e.data,command=status&0xf0,channel=(status&0x0f)+1;
+      if(command===0x90)applyMidi({event:'note_on',note:data1,velocity:data2,channel});
+      else if(command===0x80)applyMidi({event:'note_off',note:data1,velocity:data2,channel});
+      else if(command===0xb0)applyMidi({event:'cc',controller:data1,value:data2,channel});
+      else if(command===0xe0)applyMidi({event:'pitch_bend',value:data1+data2*128,channel});
+    };
+  };
+  attach();access.onstatechange=attach;
+  return access;
+}
+window.TREE3={visual,receiveVisualMessage,enableLocalMidi};
+const canvas=document.getElementById('art'),ctx=canvas.getContext('2d');let w=0,h=0,dpr=1;
+// Independent orbit controls: pointer drag changes 3D orientation; wheel/pinch zoom.
+// The audio player intercepts its own pointer events, so dragging it won't rotate the sculpture.
+const camera={yaw:.18,pitch:.38,zoom:1,vyaw:0,vpitch:0};
+const pointers=new Map();let lastGesture=null;
+const clamp=(v,lo,hi)=>Math.max(lo,Math.min(hi,v));
+function pointerDown(e){
+  pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});canvas.setPointerCapture(e.pointerId);
+  canvas.classList.add('rotating');lastGesture=null;e.preventDefault();
+}
+function pointerMove(e){
+  if(!pointers.has(e.pointerId))return;
+  const prev=pointers.get(e.pointerId);pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(pointers.size===1){
+    const dx=e.clientX-prev.x,dy=e.clientY-prev.y;
+    camera.yaw+=dx*.006;camera.pitch=clamp(camera.pitch+dy*.006,-1.48,1.48);
+    camera.vyaw=dx*.006;camera.vpitch=dy*.006;
+  }else if(pointers.size===2){
+    const ps=[...pointers.values()],dist=Math.hypot(ps[0].x-ps[1].x,ps[0].y-ps[1].y);
+    if(lastGesture&&lastGesture>0)camera.zoom=clamp(camera.zoom*dist/lastGesture,.45,5);
+    lastGesture=dist;
+  }
+  e.preventDefault();
+}
+function pointerEnd(e){pointers.delete(e.pointerId);lastGesture=null;if(!pointers.size)canvas.classList.remove('rotating')}
+canvas.addEventListener('pointerdown',pointerDown);
+canvas.addEventListener('pointermove',pointerMove);
+canvas.addEventListener('pointerup',pointerEnd);
+canvas.addEventListener('pointercancel',pointerEnd);
+canvas.addEventListener('wheel',e=>{e.preventDefault();camera.zoom=clamp(camera.zoom*Math.exp(-e.deltaY*.001),.45,5)},{passive:false});
+canvas.addEventListener('dblclick',()=>{camera.yaw=.18;camera.pitch=.38;camera.zoom=1;camera.vyaw=0;camera.vpitch=0});
+
+function resize(){dpr=Math.min(devicePixelRatio||1,2);w=canvas.clientWidth;h=canvas.clientHeight;canvas.width=Math.max(1,Math.round(w*dpr));canvas.height=Math.max(1,Math.round(h*dpr));ctx.setTransform(dpr,0,0,dpr,0,0)}
+addEventListener('resize',resize);resize();
+
+// Hybrid v7: GPU receives the exact projected filament geometry from Canvas.
+// Canvas is NEVER sampled, recolored, or audio-modulated.
+const haloCanvas=document.getElementById('halo');
+const haloToggle=document.getElementById('haloToggle');
+let haloEnabled=true;
+haloToggle.textContent='GPU plucks: ON';
+haloToggle.setAttribute('aria-pressed','true');
+haloToggle.addEventListener('click',()=>{
+ haloEnabled=!haloEnabled;
+ haloCanvas.style.opacity=haloEnabled?'1':'0';
+ haloToggle.textContent='GPU plucks: '+(haloEnabled?'ON':'OFF');
+ haloToggle.setAttribute('aria-pressed',String(haloEnabled));
+});
+let haloGL=null,haloProgram=null,haloBuffer=null,haloReady=false,haloFrame=0;
+let overlayVertices=new Float32Array(0),overlayCount=0;
+try{
+ const gl=haloCanvas.getContext('webgl',{alpha:true,antialias:true,premultipliedAlpha:false,depth:false,stencil:false});
+ if(!gl)throw Error('WebGL unavailable');
+ const shader=(type,src)=>{const sh=gl.createShader(type);gl.shaderSource(sh,src);gl.compileShader(sh);if(!gl.getShaderParameter(sh,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(sh));return sh;};
+ const vs=shader(gl.VERTEX_SHADER,`precision highp float;
+ attribute vec2 aPos; attribute vec2 aNormal;
+ attribute float aSide; attribute float aBand; attribute float aLong; attribute float aDepth;
+ uniform vec2 uSize; uniform vec3 uLevel; uniform vec3 uAttack; uniform vec3 uPhase; uniform vec3 uAge; uniform vec3 uOrigin;
+ varying float vBand; varying float vDepth; varying float vEdge; varying float vActive;
+ void main(){
+  float band=aBand;
+  float level=band<.5?uLevel.x:(band<1.5?uLevel.y:uLevel.z);
+  float attack=band<.5?uAttack.x:(band<1.5?uAttack.y:uAttack.z);
+  float phase=band<.5?uPhase.x:(band<1.5?uPhase.y:uPhase.z);
+  float age=band<.5?uAge.x:(band<1.5?uAge.y:uAge.z);
+  float origin=band<.5?uOrigin.x:(band<1.5?uOrigin.y:uOrigin.z);
+  float speed=band<.5?.30:(band<1.5?.47:.68);
+  // Two compact wave packets propagate in opposite directions from the pluck.
+  float forward=fract(origin+age*speed);
+  float backward=fract(origin-age*speed+1.0);
+  float d1=abs(aLong-forward);d1=min(d1,1.0-d1);
+  float d2=abs(aLong-backward);d2=min(d2,1.0-d2);
+  float width=band<.5?.066:(band<1.5?.047:.034);
+  float packet=exp(-pow(d1/width,2.0)*2.0)+.65*exp(-pow(d2/width,2.0)*2.0);
+  float oscillation=sin((aLong-origin)*6.283185*(band<.5?21.0:(band<1.5?31.0:45.0))-phase);
+  float displacement=oscillation*packet*attack*(band<.5?108.0:(band<1.5?99.0:112.0));
+  float hit=clamp(attack*exp(-age*(band<.5?2.0:(band<1.5?2.6:3.1))),0.0,1.0);
+  float thickness=(band<.5?2.0:(band<1.5?1.85:1.7))*(1.0+.55*pow(max(level,0.0),.75)+2.9*hit);
+  vec2 p=aPos+aNormal*(displacement+aSide*thickness);
+  vec2 clip=p/uSize*2.0-1.0; clip.y=-clip.y;
+  gl_Position=vec4(clip,0.0,1.0);
+  vBand=band;vDepth=aDepth;vEdge=abs(aSide);vActive=clamp((packet*.85+hit*.55)*attack*2.5,0.0,1.0);
+ }`);
+ const fs=shader(gl.FRAGMENT_SHADER,`precision highp float;
+ varying float vBand; varying float vDepth; varying float vEdge; varying float vActive;
+ void main(){
+  vec3 c=vBand<.5?vec3(78.,226.,210.)/255.:(vBand<1.5?vec3(175.,158.,255.)/255.:vec3(245.,178.,125.)/255.);
+  float foreground=clamp((vDepth+1.5)/3.0,0.0,1.0);
+  float core=exp(-pow(vEdge/.43,2.0)*1.4);
+  float haze=exp(-pow(vEdge/1.15,2.0)*1.8);
+  float a=vActive*(.63+.29*foreground)*(.78*core+.26*haze);
+  gl_FragColor=vec4(c,a);
+ }`);
+ const program=gl.createProgram();gl.attachShader(program,vs);gl.attachShader(program,fs);gl.linkProgram(program);
+ if(!gl.getProgramParameter(program,gl.LINK_STATUS))throw Error(gl.getProgramInfoLog(program));
+ const buffer=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buffer);
+ const stride=8*4;
+ for(const [name,n] of [['aPos',2],['aNormal',2],['aSide',1],['aBand',1],['aLong',1],['aDepth',1]]){
+  const loc=gl.getAttribLocation(program,name);if(loc>=0){gl.enableVertexAttribArray(loc);gl.vertexAttribPointer(loc,n,gl.FLOAT,false,stride,(['aPos','aNormal','aSide','aBand','aLong','aDepth'].slice(0,['aPos','aNormal','aSide','aBand','aLong','aDepth'].indexOf(name)).reduce((sum,key)=>sum+({aPos:2,aNormal:2,aSide:1,aBand:1,aLong:1}[key]||0),0))*4);}
+ }
+ gl.disable(gl.DEPTH_TEST);gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
+ haloGL=gl;haloProgram=program;haloBuffer=buffer;haloReady=true;
+}catch(err){console.warn('GPU response disabled; original torus unaffected:',err);haloCanvas.style.display='none';}
+function renderHalo(){
+ if(!haloReady||!haloEnabled||!overlayCount)return;
+ const gl=haloGL;
+ const hw=Math.max(1,Math.round(w)),hh=Math.max(1,Math.round(h));
+ if(haloCanvas.width!==hw||haloCanvas.height!==hh){haloCanvas.width=hw;haloCanvas.height=hh;gl.viewport(0,0,hw,hh);}
+ gl.useProgram(haloProgram);gl.bindBuffer(gl.ARRAY_BUFFER,haloBuffer);
+ gl.bufferData(gl.ARRAY_BUFFER,overlayVertices,gl.DYNAMIC_DRAW);
+ const d=visual.dynamics;
+ gl.uniform2f(gl.getUniformLocation(haloProgram,'uSize'),w,h);
+ gl.uniform3f(gl.getUniformLocation(haloProgram,'uLevel'),d.bass,d.mid,d.high);
+ gl.uniform3f(gl.getUniformLocation(haloProgram,'uAttack'),stringMotion.bass.pluck,stringMotion.mid.pluck,stringMotion.high.pluck);
+ gl.uniform3f(gl.getUniformLocation(haloProgram,'uPhase'),stringMotion.bass.phase,stringMotion.mid.phase,stringMotion.high.phase);
+ gl.uniform3f(gl.getUniformLocation(haloProgram,'uAge'),stringMotion.bass.age,stringMotion.mid.age,stringMotion.high.age);
+ gl.uniform3f(gl.getUniformLocation(haloProgram,'uOrigin'),stringMotion.bass.origin,stringMotion.mid.origin,stringMotion.high.origin);
+ gl.clearColor(0,0,0,0);gl.clear(gl.COLOR_BUFFER_BIT);
+ gl.drawArrays(gl.TRIANGLES,0,overlayCount);
+}
+// Three visual rings; low/lower-mid drive v4 waves, upper-mid/treble add glow and flutter.
+// MIDI and composition metadata provide additional visual expression.
+const rings=[
+ {rgb:[78,226,210],major:1.0,minor:.38,frequency:3,velocity:.19,twist:2,thickness:1.8,band:"bass"}, // drone
+ {rgb:[175,158,255],major:.82,minor:.23,frequency:8,velocity:.36,twist:4,thickness:1.55,band:"mid"}, // harmony
+ {rgb:[245,178,125],major:.66,minor:.12,frequency:23,velocity:.62,twist:7,thickness:1.2,band:"high"} // texture
+];
+function render(t){
+ ctx.clearRect(0,0,w,h);ctx.fillStyle='#080e1b';ctx.fillRect(0,0,w,h);
+ const bg=ctx.createRadialGradient(w*.5,h*.48,0,w*.5,h*.48,Math.max(w,h)*.73);
+ bg.addColorStop(0,'rgba(37,72,106,.34)');bg.addColorStop(.54,'rgba(16,33,61,.18)');bg.addColorStop(1,'rgba(8,14,27,0)');ctx.fillStyle=bg;ctx.fillRect(0,0,w,h);
+ const scale=Math.min(w*.39,h*.62)*camera.zoom,cx=w*.5,cy=h*.50;
+ const d={bass:0,mid:0,high:0,structure:0,trebleBeat:0,bassGlow:0,phase:0}; // Canvas is permanently audio-independent.
+ const tilt=camera.pitch,rotation=t*.028;
+ const yaw=camera.yaw; // Preserve the original v0.5 camera and motion exactly.
+ // Original geometry is the resting state. Audio adds smooth transverse string vibration.
+ function point(theta,phi,ring){
+   // Exact original geometry at rest; music gradually simplifies the
+   // waveform toward a clean fundamental instead of introducing chaos.
+   const phase=theta*ring.frequency-t*ring.velocity;
+   const fundamental=Math.sin(phase);
+   const second=Math.sin(theta*ring.frequency*2+t*.23);
+   const structure=clamp(d.structure,0,1);
+   const original=1+.085*fundamental+.028*(1-.82*structure)*second;
+   const band=clamp(d[ring.band],0,1);
+   const upper=ring.band==='high'?d.trebleBeat:0;
+   const midiPulse=0; // MIDI is kept as a separate future control interface.
+   const organize=1-.50*structure;
+   const baseWaves=ring.frequency*3;
+   const speed=t*ring.velocity*(2.4+band*2.5);
+   const wave=Math.sin(theta*baseWaves-speed+phi*.7);
+   const ripple=Math.sin(theta*(baseWaves*2+5)+speed*1.6+phi*1.3);
+   const arc=Math.atan2(Math.sin(theta-d.phase),Math.cos(theta-d.phase));
+   const strike=Math.exp(-Math.pow(arc/.38,2));
+   const localOnset=ring.band==='high'?d.trebleBeat:clamp(bandOnsets[ring.band]*7,0,1);
+   const impulse=clamp(localOnset*.19*band,0,1);
+   const traveling=organize*((.060*band)*wave+(.035*band)*ripple);
+   const transient=organize*impulse*.42*strike;
+   const fine=organize*.012*band*Math.sin(theta*(ring.frequency*5+7)-t*ring.velocity*7+phi*1.7);
+   const flutterA=ring.frequency*2+11;
+   const flutterB=ring.frequency*3+15;
+   const upperFlutter=ring.band==='high'?organize*(upper*(.046*Math.sin(theta*flutterA-t*ring.velocity*9+phi*2.1)
+     +.030*Math.sin(theta*flutterB+t*ring.velocity*12-phi*1.6))
+     +upper*.042*Math.sin(theta*(ring.frequency*3+21)-t*ring.velocity*11+phi*2.7)):0;
+   const orangePulse=ring.band==='high'?d.trebleBeat*.65:0;
+   const musicalSine=ring.band==='high'?(.10*orangePulse*fundamental+.042*orangePulse*Math.sin(phase*2-t*ring.velocity*1.5)):0;
+   const bassWiggle=ring.band==='bass'?d.bassGlow*(.040*Math.sin(phase*1.7-t*.65+phi*.65)
+     +.018*Math.sin(theta*ring.frequency*3-t*1.8+phi*.5)):0;
+   const r=ring.minor*(original+traveling+transient+fine+upperFlutter+musicalSine+bassWiggle);
+   const a=ring.major+r*Math.cos(phi)
+     +(.012*band+.027*localOnset)*Math.sin(theta*14-speed);
+   let x=a*Math.cos(theta),y=a*Math.sin(theta),z=r*Math.sin(phi);
+   // v11: musical excitation of a transverse string mode. This motion is
+   // orthogonal to the filament's main toroidal direction, and exactly zero
+   // when the corresponding frequency band is inactive. Smooth standing-wave
+   // modes prevent discontinuities where each filament closes on itself.
+   const motion={pluck:0,phase:0}; // All plucking belongs exclusively to the GPU overlay.
+   const excitation=0;
+   const mode=ring.band==='bass'?3:ring.band==='mid'?6:11;
+   const gain=ring.band==='bass'?.62:ring.band==='mid'?.52:.46;
+   // A transient excites a standing wave; the motion continues and damps
+   // even when the energy that produced it is no longer present.
+   const spatial=Math.sin(mode*theta+phi*.35);
+   const oscillation=Math.sin(motion.phase+phi*.6);
+   const secondary=.22*Math.sin((mode+2)*theta-motion.phase*.63+phi*.35);
+   const deflection=ring.minor*gain*excitation*(spatial*oscillation+secondary);
+   // Local radial and vertical directions are both transverse to the
+   // circular path. The mixture makes a plucked filament legible in 3D.
+   x+=Math.cos(theta)*deflection*.72;
+   y+=Math.sin(theta)*deflection*.72;
+   z+=deflection*.69;
+   const cr=Math.cos(rotation),sr=Math.sin(rotation);const xr=x*cr-y*sr,yr=x*sr+y*cr;
+   const yy=yr*Math.sin(tilt)+z*Math.cos(tilt),zTilt=yr*Math.cos(tilt)-z*Math.sin(tilt);
+   const xx=xr*Math.cos(yaw)+zTilt*Math.sin(yaw);
+   const zz=-xr*Math.sin(yaw)+zTilt*Math.cos(yaw);
+   const perspective=3.7/(3.7-zz*.22);
+   return {x:cx+xx*scale*perspective,y:cy+yy*scale*perspective,z:zz};
+ }
+ // Interleaved depth-sorted line segments make the rings feel like one object.
+ const segments=[];
+ for(let k=0;k<rings.length;k++){
+   const ring=rings[k],filaments=k===0?13:k===1?10:8,steps=k===2?600:k===1?360:260;
+   for(let j=0;j<filaments;j++){
+     const phi=j/filaments*Math.PI*2;
+     const vertices=[];
+     for(let i=0;i<=steps;i++){
+       const th=i/steps*Math.PI*2;
+       vertices.push(point(th,phi+ring.twist*th+t*ring.velocity*.23,ring));
+     }
+     const normals=vertices.map((v,i)=>{
+       const before=vertices[(i-1+steps)%steps];
+       const after=vertices[(i+1)%steps];
+       const dx=after.x-before.x,dy=after.y-before.y;
+       const len=Math.hypot(dx,dy)||1;
+       return {x:-dy/len,y:dx/len};
+     });
+     normals[steps]=normals[0];
+     for(let i=0;i<steps;i++){
+       const a=vertices[i],b=vertices[i+1];
+       segments.push({a,b,na:normals[i],nb:normals[i+1],depth:(a.z+b.z)*.5,k,j,i});
+     }
+   }
+ }
+ // Share projected coordinates with WebGL; no audio enters the Canvas renderer.
+ // A sparse selection of original solid filaments forms the independent overlay.
+ const gpu=[];
+ function gpuVertex(p,n,side,band,longitudinal){gpu.push(p.x,p.y,n.x,n.y,side,band,longitudinal,p.z);}
+ for(const seg of segments){
+   if(seg.j%(seg.k===2?3:5)!==0)continue;
+   // Use the same endpoints, normals, and camera projection as Canvas2D.
+   const steps=seg.k===2?600:seg.k===1?360:260;
+   // Arc fraction is recovered from segment index, recorded below.
+   const u0=seg.i/steps,u1=(seg.i+1)/steps;
+   gpuVertex(seg.a,seg.na,-1,seg.k,u0);
+   gpuVertex(seg.a,seg.na, 1,seg.k,u0);
+   gpuVertex(seg.b,seg.nb,-1,seg.k,u1);
+   gpuVertex(seg.b,seg.nb,-1,seg.k,u1);
+   gpuVertex(seg.a,seg.na, 1,seg.k,u0);
+   gpuVertex(seg.b,seg.nb, 1,seg.k,u1);
+ }
+ overlayVertices=new Float32Array(gpu);overlayCount=gpu.length/8;
+ segments.sort((a,b)=>a.depth-b.depth);
+ ctx.lineCap='round';
+ for(const seg of segments){
+   const ring=rings[seg.k],[r,g,b]=ring.rgb;
+   const near=Math.max(0,Math.min(1,(seg.depth+1.5)/3));
+   // Exactly the original line opacity, including when no audio is playing.
+   const alpha=(.11+.42*near)*(seg.j%3===0?1:.55);
+   const localEnergy=seg.k===0?d.bassGlow:seg.k===1?d.mid:d.trebleBeat;
+   // Continuous band loudness controls glow, independent of onset pulses.
+   const bandLoudness=clamp(d[ring.band],0,1);
+   const brightness=1+(seg.k===0?2.4:seg.k===1?2.25:3.0)*bandLoudness;
+   const widthGain=1+(seg.k===0?2.2:seg.k===1?1.9:1.7)*Math.pow(bandLoudness,.75);
+   const litAlpha=Math.min(1,alpha*brightness);
+   // Green and purple both fan into separate strands, at different amplitudes.
+   const fanEnergy=seg.k===0?d.bassGlow:seg.k===1?d.mid:0;
+   const spread=seg.k===0?ring.thickness*11*fanEnergy:
+                seg.k===1?ring.thickness*5.8*fanEnergy:0;
+   ctx.beginPath();ctx.moveTo(seg.a.x,seg.a.y);ctx.lineTo(seg.b.x,seg.b.y);
+   ctx.strokeStyle=`rgba(${r},${g},${b},${litAlpha*.13})`;
+   ctx.lineWidth=ring.thickness*6*widthGain;ctx.stroke();
+   if(fanEnergy>.008){
+     // Six individual strands, arranged symmetrically around the original.
+     // The strand spacing follows the bass envelope, not random jitter.
+     for(const offset of [-1,-.65,-.32,.32,.65,1]){
+       const distance=offset*spread;
+       ctx.beginPath();
+       ctx.moveTo(seg.a.x+seg.na.x*distance,seg.a.y+seg.na.y*distance);
+       ctx.lineTo(seg.b.x+seg.nb.x*distance,seg.b.y+seg.nb.y*distance);
+       const outer= Math.abs(offset)>.9;
+       ctx.strokeStyle=`rgba(${r},${g},${b},${litAlpha*fanEnergy*(outer?.34:.48)})`;
+       ctx.lineWidth=ring.thickness*(outer?.57:.72)*widthGain;
+       ctx.stroke();
+     }
+   }
+   ctx.beginPath();ctx.moveTo(seg.a.x,seg.a.y);ctx.lineTo(seg.b.x,seg.b.y);
+   ctx.strokeStyle=`rgba(${r},${g},${b},${litAlpha})`;
+   ctx.lineWidth=ring.thickness*widthGain;ctx.stroke();
+ }
+ // Thin highlight threads preserve the glowing line aesthetic of v0.5.
+ for(const ring of rings){
+   ctx.beginPath();const N=450;
+   for(let i=0;i<=N;i++){
+     const th=i/N*Math.PI*2,phi=ring.twist*th+t*ring.velocity*.23;
+     const p=point(th,phi,ring);if(i===0)ctx.moveTo(p.x,p.y);else ctx.lineTo(p.x,p.y);
+   }
+   const [r,g,b]=ring.rgb;const localEnergy=clamp(d[ring.band],0,1);ctx.strokeStyle=`rgba(${r},${g},${b},${Math.min(1,.66*(1+localEnergy*(ring.band==='high'?2.4:1.7)))})`;ctx.lineWidth=ring.thickness*(1+1.65*Math.pow(localEnergy,.75));ctx.stroke();
+ }
+}
+// Diagnostics: open browser console and run TREE3.diagnostics() during playback.
+window.TREE3.diagnostics=()=>({gpuReady:haloReady,gpuEnabled:haloEnabled,gpuVertices:overlayCount,hitCounts:{...diag.hits},analysisAvailable,audioContext:audioContext?.state,
+  raw:{...visual.audio},onsets:{...bandOnsets},strings:Object.fromEntries(Object.entries(stringMotion).map(([k,v])=>[k,{pluck:v.pluck,phase:v.phase}])),dynamics:{...visual.dynamics},
+  playback:audio.paused?'paused':'playing'});
+const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+if(reduced){render(0);renderHalo()}else{
+ let prev=0;
+ function frame(ms){
+   const dt=Math.min(.05,(ms-prev)/1000||.016);prev=ms;
+    updateAudioAnalysis(dt);updateComposition(dt);
+   if(!pointers.size){
+     camera.yaw+=camera.vyaw*dt*60;camera.pitch=clamp(camera.pitch+camera.vpitch*dt*60,-1.48,1.48);
+     const decay=Math.pow(.90,dt*60);camera.vyaw*=decay;camera.vpitch*=decay;
+     // Quiet ambient motion after the user's spin comes to rest.
+     camera.yaw+=dt*.018;
+   }
+   render(ms*.001);renderHalo(ms*.001);haloFrame=ms;requestAnimationFrame(frame);
+ }
+ requestAnimationFrame(frame);
+}
+</script>
+</body>
+</html>
