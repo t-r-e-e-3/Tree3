@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TREE(3) — Seven Nested Hyperboloids</title>
+<style>
+:root{color-scheme:dark}*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#030408;color:#cbd1dd;font:12px system-ui,sans-serif}canvas{display:block;width:100%;height:100%;touch-action:none;cursor:grab}canvas:active{cursor:grabbing}.panel{position:absolute;top:18px;left:18px;width:240px;padding:16px;border:1px solid #ffffff20;border-radius:12px;background:#0b0d16d9;backdrop-filter:blur(14px)}h1{font-size:13px;letter-spacing:.14em;margin:0 0 5px;color:#fff;font-weight:600}.sub{font-size:11px;color:#8993a8;margin-bottom:17px}.control{margin:13px 0}.control label{display:flex;justify-content:space-between;margin-bottom:7px}input[type=range]{width:100%;accent-color:#a4a8d8}.layers{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:10px}.layers label{display:flex;align-items:center;gap:7px;cursor:pointer}.dot{width:9px;height:9px;border-radius:50%;display:inline-block}.foot{font-size:10px;line-height:1.6;color:#778196;margin-top:15px}.buttons{display:flex;gap:7px;margin-top:14px}button{flex:1;background:#191d2c;color:#d9e0f0;border:1px solid #ffffff20;border-radius:6px;padding:8px;cursor:pointer}button:hover{background:#282e44}@media(max-width:600px){.panel{top:10px;left:10px;width:205px;padding:12px}h1{font-size:11px}.sub{margin-bottom:9px}.control{margin:8px 0}}
+</style>
+</head>
+<body>
+<canvas id="scene" aria-label="Interactive seven nested animated filament hyperboloids"></canvas>
+<div class="panel"><h1>TREE(3) / SEVEN FIELDS</h1><div class="sub">Nested hyperboloid filament study</div>
+<div class="control"><label>Motion <span id="speedValue">1.00×</span></label><input id="speed" type="range" min="0" max="3" step="0.01" value="1"></div>
+<div class="control"><label>Filaments <span id="densityValue">64</span></label><input id="density" type="range" min="16" max="160" step="8" value="64"></div>
+<div class="control"><label>Glow <span id="glowValue">0.65</span></label><input id="glow" type="range" min="0" max="1.5" step="0.05" value="0.65"></div>
+<div class="control"><label>Perspective <span id="perspectiveValue">0.75</span></label><input id="perspective" type="range" min="0" max="1.5" step="0.05" value="0.75"></div>
+<div class="layers" id="layers"></div>
+<div class="buttons"><button id="pause">Pause</button><button id="reset">Reset view</button></div>
+<div class="foot">Drag to orbit · Scroll to zoom<br>Double-click to reset view</div></div>
+<script>
+(()=>{
+'use strict';
+const canvas=document.getElementById('scene'),ctx=canvas.getContext('2d',{alpha:false});
+const colors=['#ff3d46','#ff962f','#ffe353','#52ef79','#55dbff','#416dff','#bd69ff'];
+const names=['Red','Orange','Yellow','Green','Light blue','Dark blue','Purple'];
+// Each shell is a ruled one-sheet hyperboloid: r(z) = waist * sqrt(1 + (z / flareScale)^2).
+// Wide outer shells have extremely small flareScale, producing a near-horizontal opening.
+// Inner shells have greater height/waist and larger flareScale, making them more cylindrical.
+const shells=[
+ {waist:1.66,height:.68,flare:.23,twist:1.55},
+ {waist:1.38,height:.96,flare:.53,twist:1.38},
+ {waist:1.15,height:1.28,flare:.94,twist:1.18},
+ {waist:.94,height:1.64,flare:1.48,twist:1.02},
+ {waist:.73,height:2.05,flare:2.38,twist:.86},
+ {waist:.53,height:2.47,flare:3.55,twist:.72},
+ {waist:.34,height:2.94,flare:5.15,twist:.59}
+];
+const enabled=colors.map(()=>true),layers=document.getElementById('layers');
+colors.forEach((c,i)=>{const lab=document.createElement('label'),check=document.createElement('input');check.type='checkbox';check.checked=true;check.addEventListener('change',()=>enabled[i]=check.checked);const dot=document.createElement('i');dot.className='dot';dot.style.background=c;lab.append(check,dot,document.createTextNode(names[i]));layers.append(lab)});
+const state={yaw:.44,pitch:-.25,zoom:1,speed:1,density:64,glow:.65,perspective:.75,paused:false,phase:0};
+let W=0,H=0,dpr=1,drag=false,lastX=0,lastY=0,lastTime=0;
+function resize(){dpr=Math.min(devicePixelRatio||1,2);W=innerWidth;H=innerHeight;canvas.width=Math.round(W*dpr);canvas.height=Math.round(H*dpr);ctx.setTransform(dpr,0,0,dpr,0,0)}
+addEventListener('resize',resize);resize();
+function reset(){state.yaw=.44;state.pitch=-.25;state.zoom=1}document.getElementById('reset').onclick=reset;canvas.ondblclick=reset;
+canvas.addEventListener('pointerdown',e=>{drag=true;lastX=e.clientX;lastY=e.clientY;canvas.setPointerCapture(e.pointerId)});
+canvas.addEventListener('pointermove',e=>{if(!drag)return;state.yaw+=(e.clientX-lastX)*.006;state.pitch=Math.max(-1.52,Math.min(1.52,state.pitch+(e.clientY-lastY)*.006));lastX=e.clientX;lastY=e.clientY});
+canvas.addEventListener('pointerup',()=>drag=false);canvas.addEventListener('pointercancel',()=>drag=false);
+canvas.addEventListener('wheel',e=>{e.preventDefault();state.zoom=Math.max(.28,Math.min(3.4,state.zoom*Math.exp(-e.deltaY*.001)))},{passive:false});
+for(const key of ['speed','density','glow','perspective']){document.getElementById(key).addEventListener('input',e=>{state[key]=+e.target.value;document.getElementById(key+'Value').textContent=key==='speed'?state[key].toFixed(2)+'×':key==='density'?String(state[key]):state[key].toFixed(2)})}
+const pause=document.getElementById('pause');pause.onclick=()=>{state.paused=!state.paused;pause.textContent=state.paused?'Resume':'Pause'};
+function project(x,y,z){const cy=Math.cos(state.yaw),sy=Math.sin(state.yaw),cp=Math.cos(state.pitch),sp=Math.sin(state.pitch);const xx=x*cy-z*sy,zz=x*sy+z*cy;const yy=y*cp-zz*sp,depth=y*sp+zz*cp;const base=Math.min(W,H)*.155*state.zoom;const perspective=1/(1+Math.max(-4,depth)*state.perspective*.065);return {x:W*.5+xx*base*perspective,y:H*.52-yy*base*perspective,depth};}
+function rgba(hex,a){const n=parseInt(hex.slice(1),16);return `rgba(${n>>16&255},${n>>8&255},${n&255},${a})`}
+// Filament paths follow rotating helical rulings along each hyperboloid shell.
+function render(now){const dt=Math.min(.05,Math.max(0,(now-lastTime)/1000||0));lastTime=now;if(!state.paused)state.phase+=dt*state.speed;
+ctx.fillStyle='#030408';ctx.fillRect(0,0,W,H);
+const paths=[];const steps=60;
+for(let s=0;s<7;s++){if(!enabled[s])continue;const sh=shells[s],n=state.density;
+for(let j=0;j<n;j++){
+const a=j*2*Math.PI/n+state.phase*(.09+s*.013)*(s%2?-1:1),points=[];
+for(let k=0;k<=steps;k++){
+const t=k/steps,z=(t*2-1)*sh.height;
+const r=sh.waist*Math.sqrt(1+(z/sh.flare)**2);
+// A slight axial twist creates continuous flowing strands rather than static meridians.
+const theta=a+sh.twist*Math.atan(z/sh.flare)+state.phase*.13*(s%2?-1:1)+.038*Math.sin(t*8+state.phase*1.6+j*.3);
+points.push(project(r*Math.cos(theta),z,r*Math.sin(theta)));
+}
+const mid=points[steps>>1].depth;
+paths.push({points,depth:mid,color:colors[s],s,j});
+}}
+paths.sort((a,b)=>b.depth-a.depth);
+ctx.lineCap='round';ctx.lineJoin='round';
+for(const p of paths){const {points,color,s,j}=p;const pulse=.67+.33*Math.sin(state.phase*1.7+j*.39+s*1.2);const alpha=(.17+.14*pulse)*(s<2?.75:1);const trace=()=>{ctx.beginPath();ctx.moveTo(points[0].x,points[0].y);for(let k=1;k<points.length;k++)ctx.lineTo(points[k].x,points[k].y)};
+if(state.glow>.01){trace();ctx.strokeStyle=rgba(color,.045*state.glow);ctx.lineWidth=4.5*state.glow;ctx.stroke()}
+trace();ctx.strokeStyle=rgba(color,alpha);ctx.lineWidth=.65;ctx.stroke();
+// Moving packets of brightness ride along each filament, giving the strands a living current.
+const u=((state.phase*(.14+.025*s)+j*.61803398875)%1+1)%1,idx=Math.min(steps-1,Math.floor(u*steps)),f=u*steps-idx;
+const x=points[idx].x+(points[idx+1].x-points[idx].x)*f,y=points[idx].y+(points[idx+1].y-points[idx].y)*f;
+ctx.beginPath();ctx.arc(x,y,.75+state.glow*.6,0,Math.PI*2);ctx.fillStyle=rgba(color,.43+.24*pulse);ctx.fill();
+}
+requestAnimationFrame(render)}requestAnimationFrame(render);
+})();
+</script>
+</body></html>
