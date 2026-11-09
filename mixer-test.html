@@ -155,6 +155,9 @@ document.addEventListener('keydown',e=>{
   }
 });
 const audio=document.getElementById('stream');
+const pranaAudio=document.getElementById('pranaStream');
+pranaAudio.src=PRANA_STREAM_URL;
+pranaAudio.volume=0.5;
 const play=document.getElementById('play');
 const playIcon=document.getElementById('playIcon');
 const mute=document.getElementById('mute');
