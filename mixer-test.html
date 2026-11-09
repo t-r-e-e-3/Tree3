@@ -71,6 +71,7 @@
 <svg id="speakerIcon" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M18.5 6a9 9 0 0 1 0 12"/></svg>
 </button>
 <input class="volume" id="volume" aria-label="Volume" type="range" min="0" max="1" step="0.01" value="0.75">
+<input class="volume" id="pranaVolume" aria-label="Prana volume" title="Prana volume" type="range" min="0" max="1" step="0.01" value="0.5" style="accent-color:#af9eff">
 
 <div class="pluckGroup" role="group" aria-label="Live visual test plucks">
 <button class="pluckOrb" id="diagTestBass" aria-label="Test bass pluck" title="Bass pluck" style="--orb:#4ee2d2;--orb-dark:#087e75;--orb-glow:#4ee2d288"></button>
@@ -163,6 +164,11 @@ const playIcon=document.getElementById('playIcon');
 const mute=document.getElementById('mute');
 const speakerIcon=document.getElementById('speakerIcon');
 const volume=document.getElementById('volume');
+const pranaVolume=document.getElementById('pranaVolume');
+
+pranaVolume.addEventListener('input',()=>{
+  pranaAudio.volume=Number(pranaVolume.value);
+});
 const playSvg='<path d="M9 6l10 6-10 6z" fill="currentColor" stroke="none"/>';
 const pauseSvg='<path d="M8 5v14M16 5v14"/>';
 const speakerSvg='<path d="M4 9v6h4l5 4V5L8 9H4z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M18.5 6a9 9 0 0 1 0 12"/>';
