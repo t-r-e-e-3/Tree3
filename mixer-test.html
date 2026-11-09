@@ -179,6 +179,26 @@ play.addEventListener('click',async()=>{
   if(!audio.paused || !pranaAudio.paused){
     audio.pause();
     pranaAudio.pause();
+    syncControls();
+    return;
+  }
+
+  const results = await Promise.allSettled([
+    audio.play(),
+    pranaAudio.play()
+  ]);
+
+  results.forEach((result,index)=>{
+    if(result.status==='rejected'){
+      console.error(
+        (index===0?'Akasha':'Prana')+' playback failed:',
+        result.reason
+      );
+    }
+  });
+
+  syncControls();
+});
     
 audio.addEventListener('play',syncControls);
 audio.addEventListener('pause',syncControls);
