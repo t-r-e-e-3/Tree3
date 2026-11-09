@@ -176,9 +176,10 @@ const audioContext=null, analyser=null, analysisAvailable=false;
 const frequencyData=null,timeData=null;
 audio.src=STREAM_URL;
 play.addEventListener('click',async()=>{
- if(!audio.paused){audio.pause();return}
- try{await audio.play()}catch(err){console.error('Unable to play radio stream:',err)}
-});
+  if(!audio.paused || !pranaAudio.paused){
+    audio.pause();
+    pranaAudio.pause();
+    
 audio.addEventListener('play',syncControls);
 audio.addEventListener('pause',syncControls);
 audio.addEventListener('error',()=>{syncControls();console.error('Radio stream unavailable')});
