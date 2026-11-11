@@ -203,11 +203,12 @@ function setMobileExpanded(open){
   controls.classList.toggle('mobile-expanded',open);
   mobileSub.classList.toggle('expanded',open);
   safariImmersive=!open;
-  if(!open && typeof closePluckFader==='function')closePluckFader();
+  // Do not reference pluck state here: this function runs during initial mobile setup,
+  // before the later let-bound pluck state has been initialized.
   syncFullscreenUI();
 }
 fullscreenButton.addEventListener('click',()=>{
-  if(iosNativePlayback){setMobileExpanded(false);return;}
+  if(iosNativePlayback){closePluckFader();setMobileExpanded(false);return;}
   if(!document.documentElement.requestFullscreen)return;
   if(document.fullscreenElement){
     document.exitFullscreen().catch(err=>console.warn('Exit fullscreen failed:',err));
@@ -287,6 +288,7 @@ if(iosNativePlayback){
   const expand=document.getElementById('mobileExpand');
   expand.addEventListener('click',()=>{
     const open=expand.getAttribute('aria-expanded')!=='true';
+    if(!open)closePluckFader();
     setMobileExpanded(open);
     if(open)requestAnimationFrame(placeSub);
   });
