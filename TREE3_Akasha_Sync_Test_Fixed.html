@@ -554,7 +554,7 @@ document.getElementById('v2TuneReset').addEventListener('click',resetV2Tuning);
 const v2SyncBox=document.createElement('div');
 v2SyncBox.style.cssText='border-top:1px solid #a8c7e333;margin-top:15px;padding-top:10px';
 const v2SyncTitle=document.createElement('div');v2SyncTitle.textContent='Audio / visual synchronization';v2SyncTitle.style.cssText='font-weight:650;margin-bottom:8px';v2SyncBox.append(v2SyncTitle);
-for(const [key,label,min,max,step] of [['bufferMs','Audio playback buffer',100,1200,25],['offsetMs','Visual alignment offset',-250,250,5]]){
+for(const [key,label,min,max,step] of [['bufferMs','Audio playback buffer',100,1200,25],['offsetMs','Visual alignment offset',-750,750,5]]){
  const row=document.createElement('label');row.className='v2TuneRow';
  const head=document.createElement('span');const name=document.createElement('span');name.textContent=label;
  const out=document.createElement('output');out.id='v2SyncValue_'+key;out.textContent=v2Sync[key]+' ms';head.append(name,out);
