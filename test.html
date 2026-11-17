@@ -381,6 +381,7 @@ function stopIosTelemetry(){
   if(iosTelemetryTimer!==null){clearTimeout(iosTelemetryTimer);iosTelemetryTimer=null;}
   if(iosTelemetryController){iosTelemetryController.abort();iosTelemetryController=null;}
   iosTelemetryEvent=null;iosTelemetryLastReceived=0;iosTelemetryLastSample=null;
+  updateIosTelemetryV2.lastEvent=null;
 }
 function startIosTelemetry(){
   if(!iosNativePlayback||!v2Enabled||iosTelemetryTimer!==null||iosTelemetryController)return;
@@ -689,6 +690,7 @@ function resetV2State(){
 // itself changes the preference; playback controls suspend/resume the effect.
 let v2Wanted=false;
 function disableV2(){
+ if(iosNativePlayback)stopIosTelemetry();
  v2Enabled=false;
  v2Toggle.classList.remove('active');
  v2Toggle.setAttribute('aria-pressed','false');
@@ -698,7 +700,7 @@ function disableV2(){
 function enableV2(){
  if(v2Enabled||!akashaAudible())return;
  try{
-  prepareV2Monitor();
+  if(!iosNativePlayback)prepareV2Monitor();
   v2MonitorError=null;
   v2Enabled=true;
   v2Toggle.classList.add('active');
@@ -706,6 +708,7 @@ function enableV2(){
   resetV2State();
   v2Timeline.length=0;
   v2ApplyBuffer();
+  if(iosNativePlayback)startIosTelemetry();
  }catch(err){v2MonitorError=String(err);console.warn('TREE(3):',err);disableV2();}
 }
 function stopV2WhenInaudible(){
@@ -731,6 +734,7 @@ function v2Band(low,high){
 function updateV2Audio(dt){
  if(!v2Enabled)return;
  if(!akashaAudible()){stopV2WhenInaudible();return;}
+ if(iosNativePlayback){updateIosTelemetryV2(dt);return;}
  const d=v2State;
  v2HitCooldown=Math.max(0,v2HitCooldown-dt);
  v2CrashCooldown=Math.max(0,v2CrashCooldown-dt);
@@ -1538,12 +1542,12 @@ if(reduced){render(0);renderHalo()}else{
      camera.yaw+=dt*.018;
    }
    // Render the analysis frame corresponding to the delayed audible sample.
-   const snapshot=v2TimelineState();
+   const snapshot=iosNativePlayback?null:v2TimelineState();
    const latest=v2Enabled?{...v2State}:null;
    const latestSignal=v2SignalDetected;
    if(v2Enabled){
      if(snapshot){for(const k of Object.keys(v2State))if(k in snapshot)v2State[k]=snapshot[k];v2SignalDetected=snapshot.signal;}
-     else {for(const k of ['bass','mid','high','level','hit','crash'])v2State[k]=0;v2SignalDetected=false;}
+     else if(!iosNativePlayback){for(const k of ['bass','mid','high','level','hit','crash'])v2State[k]=0;v2SignalDetected=false;}
    }
    render(ms*.001);renderHalo(ms*.001);
    if(latest){Object.assign(v2State,latest);v2SignalDetected=latestSignal;}
